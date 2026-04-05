@@ -96,6 +96,7 @@ void send_display_list(struct SPTask *spTask) {
 
 
 #include "psp_audio_stack.h"
+#include "psp_me.h"
 #include "sceGuDebugPrint.h"
 
 typedef int JobData;
@@ -103,17 +104,25 @@ typedef int JobData;
 
 static s16 audio_buffer[SAMPLES_HIGH * 2 * 2] __attribute__((aligned(64)));
 extern struct Stack* stack;
+int volatile mediaengine_sound = 0;
+int volatile *mediaengine_sound_ptr = &mediaengine_sound;
+int mediaengine_available = 0;
 
-int __attribute__((optimize("O0"))) run_me_audio(JobData data) {
+int __attribute__((optimize("O0"))) run_me_audio_cpu(JobData data) {
     (void)data;
     create_next_audio_buffer(audio_buffer + 0 * (SAMPLES_HIGH * 2), SAMPLES_HIGH);
     create_next_audio_buffer(audio_buffer + 1 * (SAMPLES_HIGH * 2), SAMPLES_HIGH);
     return 0;
 }
 
-int volatile mediaengine_sound = 0;
-int volatile *mediaengine_sound_ptr = &mediaengine_sound;
-int mediaengine_available = 0;
+int run_me_audio(JobData data) {
+    // Offload the whole buffer generation job; dispatching each mixer primitive would
+    // spend more time synchronizing with the ME than the primitive itself.
+    if (mediaengine_sound && psp_me_run_audio_job()) {
+        return 0;
+    }
+    return run_me_audio_cpu(data);
+}
 
 int audioOutput(SceSize args, void *argp) {
     (void)args;

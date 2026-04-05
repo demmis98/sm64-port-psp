@@ -110,11 +110,21 @@ static struct {
 struct ColorCombiner {
     uint32_t cc_id;
     struct ShaderProgram *prg;
-    uint8_t shader_input_mapping[2][4];
+    uint8_t used_textures[2];
+    uint8_t vertex_color_source[2];
 } __attribute__((packed, aligned(4)));
 
 static struct ColorCombiner color_combiner_pool[64];
 static uint8_t color_combiner_pool_size;
+
+struct TriPipelineState {
+    struct ColorCombiner *comb;
+    bool use_alpha;
+    bool used_textures[2];
+    bool use_texture;
+    float tex_u_scale, tex_v_scale;
+    float tex_u_bias, tex_v_bias;
+} __attribute__((packed, aligned(4)));
 
 static struct RSP {
     float modelview_matrix_stack[11][4][4]__attribute__((aligned(16)));
@@ -174,16 +184,22 @@ static struct RDP {
 static struct RenderingState {
     struct XYWidthHeight viewport, scissor;
     struct ShaderProgram *shader_program;
+    struct ColorCombiner *color_combiner;
+    uint32_t color_combiner_id;
+    bool color_combiner_valid;
     struct TextureHashmapNode *textures[2];
     bool depth_test;
     bool depth_mask;
     bool decal_mode;
     bool alpha_blend;
+    bool tri_pipeline_dirty;
+    struct TriPipelineState tri_pipeline;
 } rendering_state __attribute__((aligned(16)));
 
 struct GfxDimensions gfx_current_dimensions __attribute__((aligned(4)));
 
 static bool dropped_frame;
+static const struct RGBA white_color = {0xff, 0xff, 0xff, 0xff};
 
 #if defined(TARGET_PSP)
 typedef struct psp_fast_t {
@@ -522,6 +538,7 @@ static void gfx_generate_cc(struct ColorCombiner *comb, uint32_t cc_id) {
     uint8_t c[2][4];
     uint32_t shader_id = (cc_id >> 24) << 24;
     uint8_t shader_input_mapping[2][4] = {{0}};
+    struct CCFeatures cc_features;
     for (int i = 0; i < 4; i++) {
         c[0][i] = (cc_id >> (i * 3)) & 7;
         c[1][i] = (cc_id >> (12 + i * 3)) & 7;
@@ -560,9 +577,34 @@ static void gfx_generate_cc(struct ColorCombiner *comb, uint32_t cc_id) {
             shader_id |= val << (i * 12 + j * 3);
         }
     }
+    gfx_cc_get_features(shader_id, &cc_features);
     comb->cc_id = cc_id;
     comb->prg = gfx_lookup_or_create_shader_program(shader_id);
-    memcpy(comb->shader_input_mapping, shader_input_mapping, sizeof(shader_input_mapping));
+    comb->used_textures[0] = cc_features.used_textures[0];
+    comb->used_textures[1] = cc_features.used_textures[1];
+    comb->vertex_color_source[0] = cc_features.num_inputs == 0 ? CC_0 : shader_input_mapping[0][cc_features.num_inputs - 1];
+    comb->vertex_color_source[1] = cc_features.num_inputs == 0 ? CC_0 : shader_input_mapping[1][cc_features.num_inputs - 1];
+}
+
+static inline struct RGBA gfx_get_vertex_color(const struct ColorCombiner *comb, bool use_alpha, const struct RGBA *shade_color, float lod_w, bool allow_lod) {
+    switch (comb->vertex_color_source[use_alpha ? 1 : 0]) {
+        case CC_PRIM:
+            return rdp.prim_color;
+        case CC_SHADE:
+            return *shade_color;
+        case CC_ENV:
+            return rdp.env_color;
+        case CC_LOD:
+            if (allow_lod) {
+                float distance_frac = (lod_w - 3000.0f) / 3000.0f;
+                if (distance_frac < 0.0f) distance_frac = 0.0f;
+                if (distance_frac > 1.0f) distance_frac = 1.0f;
+                const uint8_t lod = distance_frac * 255.0f;
+                return (struct RGBA){lod, lod, lod, lod};
+            }
+            break;
+    }
+    return white_color;
 }
 
 static struct ColorCombiner *gfx_lookup_or_create_color_combiner(uint32_t cc_id) {
@@ -870,6 +912,133 @@ static void import_texture(int tile) {
     //printf("Time diff: %d\n", t1 - t0);
 }
 
+static inline void gfx_mark_tri_pipeline_dirty(void) {
+    rendering_state.tri_pipeline_dirty = true;
+}
+
+static void gfx_prepare_tri_pipeline_state(void) {
+    if (!rendering_state.tri_pipeline_dirty) {
+        return;
+    }
+
+    bool depth_test = (rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER;
+    if (depth_test != rendering_state.depth_test) {
+        gfx_flush();
+        gfx_rapi->set_depth_test(depth_test);
+        rendering_state.depth_test = depth_test;
+    }
+
+    bool z_upd = (rdp.other_mode_l & Z_UPD) == Z_UPD;
+    if (z_upd != rendering_state.depth_mask) {
+        gfx_flush();
+        gfx_rapi->set_depth_mask(z_upd);
+        rendering_state.depth_mask = z_upd;
+    }
+
+    bool zmode_decal = (rdp.other_mode_l & ZMODE_DEC) == ZMODE_DEC;
+    if (zmode_decal != rendering_state.decal_mode) {
+        gfx_flush();
+        gfx_rapi->set_zmode_decal(zmode_decal);
+        rendering_state.decal_mode = zmode_decal;
+    }
+
+    if (rdp.viewport_or_scissor_changed) {
+        if (memcmp(&rdp.viewport, &rendering_state.viewport, sizeof(rdp.viewport)) != 0) {
+            gfx_flush();
+            gfx_rapi->set_viewport(rdp.viewport.x, rdp.viewport.y, rdp.viewport.width, rdp.viewport.height);
+            rendering_state.viewport = rdp.viewport;
+        }
+        if (memcmp(&rdp.scissor, &rendering_state.scissor, sizeof(rdp.scissor)) != 0) {
+            gfx_flush();
+            gfx_rapi->set_scissor(rdp.scissor.x, rdp.scissor.y, rdp.scissor.width, rdp.scissor.height);
+            rendering_state.scissor = rdp.scissor;
+        }
+        rdp.viewport_or_scissor_changed = false;
+    }
+
+    uint32_t cc_id = rdp.combine_mode;
+
+    bool use_alpha = (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
+    bool use_fog = (rdp.other_mode_l >> 30) == G_BL_CLR_FOG;
+    bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
+    bool use_noise = (rdp.other_mode_l & G_AC_DITHER) == G_AC_DITHER;
+
+    if (texture_edge) {
+        use_alpha = true;
+    }
+
+    if (use_alpha) cc_id |= SHADER_OPT_ALPHA;
+    if (use_fog) cc_id |= SHADER_OPT_FOG;
+    if (texture_edge) cc_id |= SHADER_OPT_TEXTURE_EDGE;
+    if (use_noise) cc_id |= SHADER_OPT_NOISE;
+
+    if (!use_alpha) {
+        cc_id &= ~0xfff000;
+    }
+
+    if (!rendering_state.color_combiner_valid || rendering_state.color_combiner_id != cc_id) {
+        rendering_state.color_combiner = gfx_lookup_or_create_color_combiner(cc_id);
+        rendering_state.color_combiner_id = cc_id;
+        rendering_state.color_combiner_valid = true;
+    }
+
+    struct ColorCombiner *comb = rendering_state.color_combiner;
+    struct ShaderProgram *prg = comb->prg;
+    if (prg != rendering_state.shader_program) {
+        gfx_flush();
+        gfx_rapi->unload_shader(rendering_state.shader_program);
+        gfx_rapi->load_shader(prg);
+        rendering_state.shader_program = prg;
+    }
+    if (use_alpha != rendering_state.alpha_blend) {
+        gfx_flush();
+        gfx_rapi->set_use_alpha(use_alpha);
+        rendering_state.alpha_blend = use_alpha;
+    }
+
+    const bool used_textures[2] = {comb->used_textures[0], comb->used_textures[1]};
+    const bool linear_filter = (rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT;
+
+    for (int i = 0; i < 2; i++) {
+        if (used_textures[i]) {
+            if (rdp.textures_changed[i]) {
+                gfx_flush();
+                import_texture(i);
+                rdp.textures_changed[i] = false;
+            }
+            if (linear_filter != rendering_state.textures[i]->linear_filter ||
+                rdp.texture_tile.cms != rendering_state.textures[i]->cms ||
+                rdp.texture_tile.cmt != rendering_state.textures[i]->cmt) {
+                gfx_flush();
+                gfx_rapi->set_sampler_parameters(i, linear_filter, rdp.texture_tile.cms, rdp.texture_tile.cmt);
+                rendering_state.textures[i]->linear_filter = linear_filter;
+                rendering_state.textures[i]->cms = rdp.texture_tile.cms;
+                rendering_state.textures[i]->cmt = rdp.texture_tile.cmt;
+            }
+        }
+    }
+
+    struct TriPipelineState *state = &rendering_state.tri_pipeline;
+    state->comb = comb;
+    state->use_alpha = use_alpha;
+    state->used_textures[0] = used_textures[0];
+    state->used_textures[1] = used_textures[1];
+    state->use_texture = used_textures[0] || used_textures[1];
+    state->tex_u_scale = 0.0f;
+    state->tex_v_scale = 0.0f;
+    state->tex_u_bias = 0.0f;
+    state->tex_v_bias = 0.0f;
+    if (state->use_texture) {
+        const float filter_bias = linear_filter ? 16.0f : 0.0f;
+        state->tex_u_scale = 1.0f / (8.0f * (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4));
+        state->tex_v_scale = 1.0f / (8.0f * (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4));
+        state->tex_u_bias = (filter_bias - rdp.texture_tile.uls * 8.0f) * state->tex_u_scale;
+        state->tex_v_bias = (filter_bias - rdp.texture_tile.ult * 8.0f) * state->tex_v_scale;
+    }
+
+    rendering_state.tri_pipeline_dirty = false;
+}
+
 static inline float dot(const float a[3], const float b[3])
 {
     return (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
@@ -1159,16 +1328,21 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     struct LoadedVertex *v2 = &rsp.loaded_vertices[vtx2_idx];
     struct LoadedVertex *v3 = &rsp.loaded_vertices[vtx3_idx];
     struct LoadedVertex *v_arr[3] = {v1, v2, v3};
+    const uint32_t clip_flags = v1->clip_rej | v2->clip_rej | v3->clip_rej;
 
     if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
         // The whole triangle lies outside the visible area
         return;
     }
-    if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-        float dx1 = v1->_x / (v1->_w) - v2->_x / (v2->_w);
-        float dy1 = v1->_y / (v1->_w) - v2->_y / (v2->_w);
-        float dx2 = v3->_x / (v3->_w) - v2->_x / (v2->_w);
-        float dy2 = v3->_y / (v3->_w) - v2->_y / (v2->_w);
+    const uint32_t cull_mode = rsp.geometry_mode & G_CULL_BOTH;
+    if (cull_mode != 0) {
+        const float inv_w1 = 1.0f / v1->_w;
+        const float inv_w2 = 1.0f / v2->_w;
+        const float inv_w3 = 1.0f / v3->_w;
+        float dx1 = v1->_x * inv_w1 - v2->_x * inv_w2;
+        float dy1 = v1->_y * inv_w1 - v2->_y * inv_w2;
+        float dx2 = v3->_x * inv_w3 - v2->_x * inv_w2;
+        float dy2 = v3->_y * inv_w3 - v2->_y * inv_w2;
         float cross = dx1 * dy2 - dy1 * dx2;
         
         if ((v1->_w < 0) ^ (v2->_w < 0) ^ (v3->_w < 0)) {
@@ -1177,7 +1351,7 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
             cross = -cross;
         }
 
-        switch (rsp.geometry_mode & G_CULL_BOTH) {
+        switch (cull_mode) {
             case G_CULL_FRONT:
                 if (cross <= 0) return;
                 break;
@@ -1196,133 +1370,45 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     struct LoadedVertex _clipped_vertices[18];
     struct LoadedVertex *ptr_clipped_vertices[18];
 
-    if((v1->clip_rej || v2->clip_rej || v3->clip_rej) & CLIP_TEST_FLAGS) {
+    if (clip_flags & CLIP_TEST_FLAGS) {
         gfx_clip_single_vert(_clipped_vertices, &clipped_vertices_num, v_arr);
 
-        if(!clipped_vertices_num){
+        if (!clipped_vertices_num) {
             /* No idea if this is possible */
             return;
         }
         size_t i;
-        for(i = 0;i < clipped_vertices_num;i++){
+        for (i = 0; i < clipped_vertices_num; i++) {
             ptr_clipped_vertices[i] = &_clipped_vertices[i];
         }
         clipped_vertices = ptr_clipped_vertices;
     }
 
-    bool depth_test = (rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER;
-    if (depth_test != rendering_state.depth_test) {
-        gfx_flush();
-        gfx_rapi->set_depth_test(depth_test);
-        rendering_state.depth_test = depth_test;
-    }
-    
-    bool z_upd = (rdp.other_mode_l & Z_UPD) == Z_UPD;
-    if (z_upd != rendering_state.depth_mask) {
-        gfx_flush();
-        gfx_rapi->set_depth_mask(z_upd);
-        rendering_state.depth_mask = z_upd;
-    }
-    
-    bool zmode_decal = (rdp.other_mode_l & ZMODE_DEC) == ZMODE_DEC;
-    if (zmode_decal != rendering_state.decal_mode) {
-        gfx_flush();
-        gfx_rapi->set_zmode_decal(zmode_decal);
-        rendering_state.decal_mode = zmode_decal;
-    }
-    
-    if (rdp.viewport_or_scissor_changed) {
-        if (memcmp(&rdp.viewport, &rendering_state.viewport, sizeof(rdp.viewport)) != 0) {
-            gfx_flush();
-            gfx_rapi->set_viewport(rdp.viewport.x, rdp.viewport.y, rdp.viewport.width, rdp.viewport.height);
-            rendering_state.viewport = rdp.viewport;
-        }
-        if (memcmp(&rdp.scissor, &rendering_state.scissor, sizeof(rdp.scissor)) != 0) {
-            gfx_flush();
-            gfx_rapi->set_scissor(rdp.scissor.x, rdp.scissor.y, rdp.scissor.width, rdp.scissor.height);
-            rendering_state.scissor = rdp.scissor;
-        }
-        rdp.viewport_or_scissor_changed = false;
-    }
-    
-    uint32_t cc_id = rdp.combine_mode;
-    
-    bool use_alpha = (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
-    bool use_fog = (rdp.other_mode_l >> 30) == G_BL_CLR_FOG;
-    bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
-    bool use_noise = (rdp.other_mode_l & G_AC_DITHER) == G_AC_DITHER;
-    
-    if (texture_edge) {
-        use_alpha = true;
-    }
-    
-    if (use_alpha) cc_id |= SHADER_OPT_ALPHA;
-    if (use_fog) cc_id |= SHADER_OPT_FOG;
-    if (texture_edge) cc_id |= SHADER_OPT_TEXTURE_EDGE;
-    if (use_noise) cc_id |= SHADER_OPT_NOISE;
-    
-    if (!use_alpha) {
-        cc_id &= ~0xfff000;
-    }
-    
-    struct ColorCombiner *comb = gfx_lookup_or_create_color_combiner(cc_id);
-    struct ShaderProgram *prg = comb->prg;
-    if (prg != rendering_state.shader_program) {
-        gfx_flush();
-        gfx_rapi->unload_shader(rendering_state.shader_program);
-        gfx_rapi->load_shader(prg);
-        rendering_state.shader_program = prg;
-    }
-    if (use_alpha != rendering_state.alpha_blend) {
-        gfx_flush();
-        gfx_rapi->set_use_alpha(use_alpha);
-        rendering_state.alpha_blend = use_alpha;
-    }
-    uint8_t num_inputs;
-    bool used_textures[2];
-    gfx_rapi->shader_get_info(prg, &num_inputs, used_textures);
-
-    for (int i = 0; i < 2; i++) {
-        if (used_textures[i]) {
-            if (rdp.textures_changed[i]) {
-                gfx_flush();
-                import_texture(i);
-                rdp.textures_changed[i] = false;
-            }
-            bool linear_filter = (rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT;
-            if (linear_filter != rendering_state.textures[i]->linear_filter || rdp.texture_tile.cms != rendering_state.textures[i]->cms || rdp.texture_tile.cmt != rendering_state.textures[i]->cmt) {
-                gfx_flush();
-                gfx_rapi->set_sampler_parameters(i, linear_filter, rdp.texture_tile.cms, rdp.texture_tile.cmt);
-                rendering_state.textures[i]->linear_filter = linear_filter;
-                rendering_state.textures[i]->cms = rdp.texture_tile.cms;
-                rendering_state.textures[i]->cmt = rdp.texture_tile.cmt;
-            }
-        }
-    }
-    
-    bool use_texture = used_textures[0] || used_textures[1];
-    float tex_width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4.0f;
-    float tex_height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4.0f;
+    gfx_prepare_tri_pipeline_state();
+    const struct TriPipelineState *state = &rendering_state.tri_pipeline;
+    struct ColorCombiner *comb = state->comb;
+    const bool use_alpha = state->use_alpha;
+    const bool use_texture = state->use_texture;
+    const float tex_u_scale = state->tex_u_scale;
+    const float tex_v_scale = state->tex_v_scale;
+    const float tex_u_bias = state->tex_u_bias;
+    const float tex_v_bias = state->tex_v_bias;
+    const uint32_t shader_program_id = rendering_state.shader_program->shader_id;
     
     size_t i;
     for (i = 0; i < clipped_vertices_num; i++) {
-        buf_vbo[buf_num_vert].x = clipped_vertices[i]->x;
-        buf_vbo[buf_num_vert].y = clipped_vertices[i]->y;
-        buf_vbo[buf_num_vert].z = clipped_vertices[i]->z;
+        const struct LoadedVertex *vertex = clipped_vertices[i];
+        psp_fast_t *out = &buf_vbo[buf_num_vert];
+        out->x = vertex->x;
+        out->y = vertex->y;
+        out->z = vertex->z;
         
         if (use_texture) {
-            float u = (clipped_vertices[i]->u - rdp.texture_tile.uls * 8) / 32.0f;
-            float v = (clipped_vertices[i]->v - rdp.texture_tile.ult * 8) / 32.0f;
-            if ((rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT) {
-                // Linear filter adds 0.5f to the coordinates
-                u += 0.5f;
-                v += 0.5f;
-            }
-            buf_vbo[buf_num_vert].u = u / tex_width;
-            buf_vbo[buf_num_vert].v = v / tex_height;
+            out->u = vertex->u * tex_u_scale + tex_u_bias;
+            out->v = vertex->v * tex_v_scale + tex_v_bias;
         } else {
-            buf_vbo[buf_num_vert].u = 0;
-            buf_vbo[buf_num_vert].v = 0;
+            out->u = 0.0f;
+            out->v = 0.0f;
         }
         
         /*
@@ -1334,71 +1420,22 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
             buf_vbo[buf_vbo_len++] = clipped_vertices[i].color.a / 255.0f; // fog factor (not alpha)
         }
         */
-        struct RGBA white = (struct RGBA){0xff, 0xff, 0xff, 0xff};
-        struct RGBA tmp = (struct RGBA){0x00, 0x00, 0x00, 0x00};
-        struct RGBA *color = &white;
-
-        for (int j = 0; j < num_inputs; j++) {
-            for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
-                switch (comb->shader_input_mapping[k][j]) {
-                    case CC_PRIM:
-                        color = &rdp.prim_color;
-                        break;
-                    case CC_SHADE:
-                        color = &clipped_vertices[i]->color;
-                        break;
-                    case CC_ENV:
-                        color = &rdp.env_color;
-                        break;
-                    case CC_LOD:
-                    {
-                        float distance_frac = (v1->w - 3000.0f) / 3000.0f;
-                        if (distance_frac < 0.0f) distance_frac = 0.0f;
-                        if (distance_frac > 1.0f) distance_frac = 1.0f;
-                        tmp.r = tmp.g = tmp.b = tmp.a = distance_frac * 255.0f;
-                        color = &tmp;
-                        break;
-                    }
-                    default:
-                        color = &white;
-                        break;
-                }
-                /*@Note: should this be here ? */
-                //memcpy(&buf_vbo[buf_num_vert].color, color, sizeof(struct RGBA));
-
-                /*
-                //Ignore for now
-                if (k == 0) {
-                    buf_vbo[buf_vbo_len++] = color->r / 255.0f;
-                    buf_vbo[buf_vbo_len++] = color->g / 255.0f;
-                    buf_vbo[buf_vbo_len++] = color->b / 255.0f;
-                } else {
-                    if (use_fog && color == &clipped_vertices[i]->color) {
-                        // Shade alpha is 100% for fog
-                        buf_vbo[buf_vbo_len++] = 1.0f;
-                    } else {
-                        buf_vbo[buf_vbo_len++] = color->a / 255.0f;
-                    }
-                }*/
-
-            }
-        }
-        memcpy(&buf_vbo[buf_num_vert].color, color, sizeof(struct RGBA));
+        out->color = gfx_get_vertex_color(comb, use_alpha, &vertex->color, v1->w, true);
 
         /*@Note: Blue Star color */
-        if((rendering_state.shader_program->shader_id == 0x01200200)){
-            memcpy(&buf_vbo[buf_num_vert].color, &clipped_vertices[0]->color, sizeof(struct RGBA));
-            if(rdp.env_color.a != 255){
-                buf_vbo[buf_num_vert].color.a = rdp.env_color.a;
+        if (shader_program_id == 0x01200200) {
+            out->color = clipped_vertices[0]->color;
+            if (rdp.env_color.a != 255) {
+                out->color.a = rdp.env_color.a;
             }
         }
-        if((rendering_state.shader_program->shader_id == 0x01A00045)){
-            color = &tmp;
+        if (shader_program_id == 0x01A00045) {
+            /* Matches the old code, which only updated the temporary pointer after the copy. */
         }
         buf_num_vert++;
         buf_vbo_len += sizeof(psp_fast_t);
     }
-    buf_vbo_num_tris += clipped_vertices_num/3;
+    buf_vbo_num_tris += clipped_vertices_num / 3;
     if (buf_vbo_num_tris == MAX_BUFFERED) {
         gfx_flush();
     }
@@ -1410,97 +1447,11 @@ static void gfx_sp_tri1_2d(uint8_t vtx1_idx, uint8_t vtx2_idx, UNUSED uint8_t vt
     struct VertexColor *v2 = &rsp.loaded_vertices_2D[vtx2_idx];
     struct VertexColor *v_arr[2] = {v1, v2};
 
-    bool depth_test = (rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER;
-    if (depth_test != rendering_state.depth_test) {
-        gfx_flush();
-        gfx_rapi->set_depth_test(depth_test);
-        rendering_state.depth_test = depth_test;
-    }
-    
-    bool z_upd = (rdp.other_mode_l & Z_UPD) == Z_UPD;
-    if (z_upd != rendering_state.depth_mask) {
-        gfx_flush();
-        gfx_rapi->set_depth_mask(z_upd);
-        rendering_state.depth_mask = z_upd;
-    }
-    
-    bool zmode_decal = (rdp.other_mode_l & ZMODE_DEC) == ZMODE_DEC;
-    if (zmode_decal != rendering_state.decal_mode) {
-        gfx_flush();
-        gfx_rapi->set_zmode_decal(zmode_decal);
-        rendering_state.decal_mode = zmode_decal;
-    }
-    
-    if (rdp.viewport_or_scissor_changed) {
-        if (memcmp(&rdp.viewport, &rendering_state.viewport, sizeof(rdp.viewport)) != 0) {
-            gfx_flush();
-            gfx_rapi->set_viewport(rdp.viewport.x, rdp.viewport.y, rdp.viewport.width, rdp.viewport.height);
-            rendering_state.viewport = rdp.viewport;
-        }
-        if (memcmp(&rdp.scissor, &rendering_state.scissor, sizeof(rdp.scissor)) != 0) {
-            gfx_flush();
-            gfx_rapi->set_scissor(rdp.scissor.x, rdp.scissor.y, rdp.scissor.width, rdp.scissor.height);
-            rendering_state.scissor = rdp.scissor;
-        }
-        rdp.viewport_or_scissor_changed = false;
-    }
-    
-    uint32_t cc_id = rdp.combine_mode;
-    
-    bool use_alpha = (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
-    bool use_fog = (rdp.other_mode_l >> 30) == G_BL_CLR_FOG;
-    bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
-    bool use_noise = (rdp.other_mode_l & G_AC_DITHER) == G_AC_DITHER;
-    
-    if (texture_edge) {
-        use_alpha = true;
-    }
-    
-    if (use_alpha) cc_id |= SHADER_OPT_ALPHA;
-    if (use_fog) cc_id |= SHADER_OPT_FOG;
-    if (texture_edge) cc_id |= SHADER_OPT_TEXTURE_EDGE;
-    if (use_noise) cc_id |= SHADER_OPT_NOISE;
-    
-    if (!use_alpha) {
-        cc_id &= ~0xfff000;
-    }
-    
-    struct ColorCombiner *comb = gfx_lookup_or_create_color_combiner(cc_id);
-    struct ShaderProgram *prg = comb->prg;
-    if (prg != rendering_state.shader_program) {
-        gfx_flush();
-        gfx_rapi->unload_shader(rendering_state.shader_program);
-        gfx_rapi->load_shader(prg);
-        rendering_state.shader_program = prg;
-    }
-    if (use_alpha != rendering_state.alpha_blend) {
-        gfx_flush();
-        gfx_rapi->set_use_alpha(use_alpha);
-        rendering_state.alpha_blend = use_alpha;
-    }
-    uint8_t num_inputs;
-    bool used_textures[2];
-    gfx_rapi->shader_get_info(prg, &num_inputs, used_textures);
-    
-    for (int i = 0; i < 2; i++) {
-        if (used_textures[i]) {
-            if (rdp.textures_changed[i]) {
-                gfx_flush();
-                import_texture(i);
-                rdp.textures_changed[i] = false;
-            }
-            bool linear_filter = (rdp.other_mode_h & (3U << G_MDSFT_TEXTFILT)) != G_TF_POINT;
-            if (linear_filter != rendering_state.textures[i]->linear_filter || rdp.texture_tile.cms != rendering_state.textures[i]->cms || rdp.texture_tile.cmt != rendering_state.textures[i]->cmt) {
-                gfx_flush();
-                gfx_rapi->set_sampler_parameters(i, linear_filter, rdp.texture_tile.cms, rdp.texture_tile.cmt);
-                rendering_state.textures[i]->linear_filter = linear_filter;
-                rendering_state.textures[i]->cms = rdp.texture_tile.cms;
-                rendering_state.textures[i]->cmt = rdp.texture_tile.cmt;
-            }
-        }
-    }
-    
-    bool use_texture = used_textures[0] || used_textures[1];
+    gfx_prepare_tri_pipeline_state();
+    const struct TriPipelineState *state = &rendering_state.tri_pipeline;
+    struct ColorCombiner *comb = state->comb;
+    const bool use_alpha = state->use_alpha;
+    const bool use_texture = state->use_texture;
     //uint32_t tex_width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
     //uint32_t tex_height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
 
@@ -1538,56 +1489,7 @@ static void gfx_sp_tri1_2d(uint8_t vtx1_idx, uint8_t vtx2_idx, UNUSED uint8_t vt
             tri_buf[buf_vbo_len++] = v_arr[i]->color.a / 255.0f; // fog factor (not alpha)
         }
         */
-        struct RGBA white = (struct RGBA){0xff, 0xff, 0xff, 0xff};
-        struct RGBA *color = &white;
-        
-        //const int hack = (num_inputs > 1) * ((int)used_textures[0]);
-        for (int j = 0; j < num_inputs; j++) {
-            for (int k = 0; k < 1 + (use_alpha ? 1 : 0); k++) {
-                switch (comb->shader_input_mapping[k][j]) {
-                    case CC_PRIM:
-                        color = &rdp.prim_color;
-                        break;
-                    case CC_SHADE:
-                        color = &v_arr[i]->color;
-                        break;
-                    case CC_ENV:
-                        color = &rdp.env_color;
-                        break;
-                    /*
-                    case CC_LOD:
-                    {
-                        float distance_frac = (v1->w - 3000.0f) / 3000.0f;
-                        if (distance_frac < 0.0f) distance_frac = 0.0f;
-                        if (distance_frac > 1.0f) distance_frac = 1.0f;
-                        tmp.r = tmp.g = tmp.b = tmp.a = distance_frac * 255.0f;
-                        color = &tmp;
-                        break;
-                    }*/
-                    default:
-                        color = &white;
-                        break;
-                }
-                /*@Note: should this be here ? */
-                //memcpy(&tri_buf[buf_num_vert].color, color, sizeof(struct RGBA));
-
-                /*
-                //Ignore for now
-                if (k == 0) {
-                    tri_buf[buf_vbo_len++] = color->r / 255.0f;
-                    tri_buf[buf_vbo_len++] = color->g / 255.0f;
-                    tri_buf[buf_vbo_len++] = color->b / 255.0f;
-                } else {
-                    if (use_fog && color == &v_arr[i]->color) {
-                        // Shade alpha is 100% for fog
-                        tri_buf[buf_vbo_len++] = 1.0f;
-                    } else {
-                        tri_buf[buf_vbo_len++] = color->a / 255.0f;
-                    }
-                }*/
-            }
-        }
-        memcpy(&tri_buf[tri_num_vert].color, color, sizeof(struct RGBA));
+        tri_buf[tri_num_vert].color = gfx_get_vertex_color(comb, use_alpha, &v_arr[i]->color, 0.0f, false);
         tri_num_vert++;
     }
     gfx_scegu_draw_triangles_2d((float*)&tri_buf[0],0,1);
@@ -1596,6 +1498,7 @@ static void gfx_sp_tri1_2d(uint8_t vtx1_idx, uint8_t vtx2_idx, UNUSED uint8_t vt
 static void gfx_sp_geometry_mode(uint32_t clear, uint32_t set) {
     rsp.geometry_mode &= ~clear;
     rsp.geometry_mode |= set;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_calc_and_set_viewport(const Vp_t *viewport) {
@@ -1616,6 +1519,7 @@ static void gfx_calc_and_set_viewport(const Vp_t *viewport) {
     rdp.viewport.height = height;
     
     rdp.viewport_or_scissor_changed = true;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_sp_movemem(uint8_t index, uint8_t offset, const void* data) {
@@ -1694,6 +1598,7 @@ static void gfx_dp_set_scissor(uint32_t mode, uint32_t ulx, uint32_t uly, uint32
     rdp.scissor.height = height;
     
     rdp.viewport_or_scissor_changed = true;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_dp_set_texture_image(uint32_t format, uint32_t size, uint32_t width, const void* addr) {
@@ -1719,6 +1624,7 @@ static void gfx_dp_set_tile(uint8_t fmt, uint32_t siz, uint32_t line, uint32_t t
         rdp.texture_tile.line_size_bytes = line * 8;
         rdp.textures_changed[0] = true;
         rdp.textures_changed[1] = true;
+        gfx_mark_tri_pipeline_dirty();
     }
     
     if (tile == G_TX_LOADTILE) {
@@ -1734,6 +1640,7 @@ static void gfx_dp_set_tile_size(uint8_t tile, uint16_t uls, uint16_t ult, uint1
         rdp.texture_tile.lrt = lrt;
         rdp.textures_changed[0] = true;
         rdp.textures_changed[1] = true;
+        gfx_mark_tri_pipeline_dirty();
     }
 }
 
@@ -1775,6 +1682,7 @@ static void gfx_dp_load_block(uint8_t tile, UNUSED uint32_t uls, UNUSED uint32_t
     rdp.loaded_texture[rdp.texture_to_load.tile_number].addr = rdp.texture_to_load.addr;
     
     rdp.textures_changed[rdp.texture_to_load.tile_number] = true;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_dp_load_tile(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, uint32_t lrt) {
@@ -1810,6 +1718,7 @@ static void gfx_dp_load_tile(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t 
     rdp.texture_tile.lrt = lrt;
 
     rdp.textures_changed[rdp.texture_to_load.tile_number] = true;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 
@@ -1843,6 +1752,7 @@ static inline uint32_t color_comb(uint32_t a, uint32_t b, uint32_t c, uint32_t d
 
 static void gfx_dp_set_combine_mode(uint32_t rgb, uint32_t alpha) {
     rdp.combine_mode = rgb | (alpha << 12);
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_dp_set_env_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -1884,6 +1794,7 @@ static void gfx_draw_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lr
     
     if (cycle_type == G_CYC_COPY) {
         rdp.other_mode_h = (rdp.other_mode_h & ~(3U << G_MDSFT_TEXTFILT)) | G_TF_POINT;
+        gfx_mark_tri_pipeline_dirty();
     }
     
     // U10.2 coordinates
@@ -1923,15 +1834,18 @@ static void gfx_draw_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lr
     rdp.viewport = default_viewport;
     rdp.viewport_or_scissor_changed = true;
     rsp.geometry_mode = 0;
+    gfx_mark_tri_pipeline_dirty();
     
     gfx_sp_tri1_2d(0, 1, 2);
     
     rsp.geometry_mode = geometry_mode_saved;
     rdp.viewport = viewport_saved;
     rdp.viewport_or_scissor_changed = true;
+    gfx_mark_tri_pipeline_dirty();
     
     if (cycle_type == G_CYC_COPY) {
         rdp.other_mode_h = saved_other_mode_h;
+        gfx_mark_tri_pipeline_dirty();
     }
 }
 
@@ -1988,6 +1902,7 @@ static void gfx_dp_texture_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int3
     
     gfx_draw_rectangle(ulx, uly, lrx, lry);
     rdp.combine_mode = saved_combine_mode;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_dp_fill_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry) {
@@ -2012,6 +1927,7 @@ static void gfx_dp_fill_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t
     gfx_dp_set_combine_mode(color_comb(0, 0, 0, G_CCMUX_SHADE), color_comb(0, 0, 0, G_ACMUX_SHADE));
     gfx_draw_rectangle(ulx, uly, lrx, lry);
     rdp.combine_mode = saved_combine_mode;
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static void gfx_dp_set_z_image(void *z_buf_address) {
@@ -2032,6 +1948,7 @@ static void gfx_sp_set_other_mode(uint32_t shift, uint32_t num_bits, uint64_t mo
     om = (om & ~mask) | mode;
     rdp.other_mode_l = (uint32_t)om;
     rdp.other_mode_h = (uint32_t)(om >> 32);
+    gfx_mark_tri_pipeline_dirty();
 }
 
 static inline void *seg_addr(uintptr_t w1) {
@@ -2269,6 +2186,8 @@ void gfx_init(struct GfxWindowManagerAPI *wapi, struct GfxRenderingAPI *rapi, co
     gfx_rapi = rapi;
     gfx_wapi->init(game_name, start_in_fullscreen);
     gfx_rapi->init();
+    rendering_state.color_combiner_valid = false;
+    rendering_state.tri_pipeline_dirty = true;
 
     int i;
     for(i=0;i<30;i++){

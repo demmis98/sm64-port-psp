@@ -14,6 +14,7 @@
 #include <psprtc.h>
 
 #include "../psp_audio_stack.h"
+#include "../psp_me.h"
 
 #define GFX_API_NAME "PSP - sceGU"
 #define SCR_WIDTH (480)
@@ -41,6 +42,7 @@ int isspace(int _c) {
 
 static int exitCallback(UNUSED int arg1, UNUSED int arg2, UNUSED void *common) {
     sceKernelTerminateDeleteThread(audio_manager_thid);
+    psp_me_shutdown();
     sceKernelExitGame();
     return 0;
 }
@@ -61,6 +63,11 @@ static int callbackThread(UNUSED SceSize args, UNUSED void *argp) {
 void init_audiomanager(void) {
     extern int audioOutput(SceSize args, void *argp);
     extern int audio_manager_thid;
+    extern int mediaengine_available;
+    extern int volatile mediaengine_sound;
+
+    mediaengine_available = psp_me_init();
+    mediaengine_sound = mediaengine_available;
     audio_manager_thid = sceKernelCreateThread("AudioOutput", audioOutput, 0x12 , 0x20000, THREAD_ATTR_USER | THREAD_ATTR_VFPU, NULL);
     sceKernelStartThread(audio_manager_thid, 0, NULL);
 }

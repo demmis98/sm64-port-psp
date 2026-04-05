@@ -102,8 +102,6 @@ static void render_fps(void) {
         extern void init_audiomanager(void);
         kill_audiomanager();
         init_audiomanager();
-        mediaengine_available = 0;
-        mediaengine_sound = 0;
     }
 
     if ((gPlayer1Controller->buttonPressed & L_TRIG)) {

@@ -2,6 +2,11 @@
 #include <string.h>
 #include "lib/src/libultra_internal.h"
 #include "macros.h"
+#include "fs_utils.h"
+
+#if defined(TARGET_PSP)
+#include <pspiofilemgr.h>
+#endif
 
 #ifdef TARGET_WEB
 #include <emscripten.h>
@@ -151,8 +156,34 @@ s32 osEepromLongRead(UNUSED OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
         ret = 0;
     }
 #else
-    FILE *fp = fopen(FILE_PREFIX"sm64_save_file.bin", "rb");
+    char path[FS_MAX_PATH];
+#if !defined(TARGET_PSP)
+    FILE *fp;
+#endif
+
+    fs_resolve_path(path, sizeof(path), FILE_PREFIX"sm64_save_file.bin");
+    printf("Opening save for read: '%s'\n", path);
+#if defined(TARGET_PSP)
+    {
+        SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0777);
+        if (fd < 0) {
+            printf("Failed to open save for read.\n");
+            return -1;
+        }
+        if (sceIoRead(fd, content, sizeof(content)) == (int) sizeof(content)) {
+            memcpy(buffer, content + address * 8, nbytes);
+            ret = 0;
+        }
+        sceIoClose(fd);
+    }
+#else
+    fp = fopen(path, "rb");
+    if (fp == NULL && strcmp(path, FILE_PREFIX"sm64_save_file.bin") != 0) {
+        printf("Opening save for read (legacy fallback): '%s'\n", FILE_PREFIX"sm64_save_file.bin");
+        fp = fopen(FILE_PREFIX"sm64_save_file.bin", "rb");
+    }
     if (fp == NULL) {
+        printf("Failed to open save for read.\n");
         return -1;
     }
     if (fread(content, 1, 512, fp) == 512) {
@@ -161,11 +192,13 @@ s32 osEepromLongRead(UNUSED OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
     }
     fclose(fp);
 #endif
+#endif
     return ret;
 }
 
 s32 osEepromLongWrite(UNUSED OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes) {
     u8 content[512] = {0};
+    s32 ret;
     if (address != 0 || nbytes != 512) {
         osEepromLongRead(mq, 0, content, 512);
     }
@@ -181,12 +214,33 @@ s32 osEepromLongWrite(UNUSED OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes
     }, content);
     s32 ret = 0;
 #else
-    FILE* fp = fopen(FILE_PREFIX"sm64_save_file.bin", "wb");
+    char path[FS_MAX_PATH];
+#if !defined(TARGET_PSP)
+    FILE *fp;
+#endif
+
+    fs_resolve_path(path, sizeof(path), FILE_PREFIX"sm64_save_file.bin");
+    fs_prepare_parent_path(FILE_PREFIX"sm64_save_file.bin");
+    printf("Opening save for write: '%s'\n", path);
+#if defined(TARGET_PSP)
+    {
+        SceUID fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+        if (fd < 0) {
+            printf("Failed to open save for write.\n");
+            return -1;
+        }
+        ret = sceIoWrite(fd, content, sizeof(content)) == (int) sizeof(content) ? 0 : -1;
+        sceIoClose(fd);
+    }
+#else
+    fp = fopen(path, "wb");
     if (fp == NULL) {
+        printf("Failed to open save for write.\n");
         return -1;
     }
-    s32 ret = fwrite(content, 1, 512, fp) == 512 ? 0 : -1;
+    ret = fwrite(content, 1, 512, fp) == 512 ? 0 : -1;
     fclose(fp);
+#endif
 #endif
     return ret;
 }

@@ -30,6 +30,7 @@
 #include "controller/controller_keyboard.h"
 
 #include "configfile.h"
+#include "fs_utils.h"
 
 #include "compat.h"
 
@@ -228,11 +229,12 @@ static void on_fullscreen_changed(bool is_now_fullscreen) {
     configFullscreen = is_now_fullscreen;
 }
 
-void main_func(void) {
+void main_func(const char *argv0) {
     static u32 pool[0x165000/8 / 4 * sizeof(void *) * 4];
     main_pool_init(pool, pool + sizeof(pool) / sizeof(pool[0]));
     gEffectsMemoryPool = mem_pool_init(0x4000, MEMORY_POOL_LEFT);
 
+    fs_init(argv0);
     configfile_load(CONFIG_FILE);
     atexit(save_config);
 
@@ -312,12 +314,12 @@ void main_func(void) {
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
 int WINAPI WinMain(UNUSED HINSTANCE hInstance, UNUSED HINSTANCE hPrevInstance, UNUSED LPSTR pCmdLine, UNUSED int nCmdShow) {
-    main_func();
+    main_func(NULL);
     return 0;
 }
 #else
-int main(UNUSED int argc, UNUSED char *argv[]) {
-    main_func();
+int main(int argc, char *argv[]) {
+    main_func(argc > 0 ? argv[0] : NULL);
     return 0;
 }
 #endif

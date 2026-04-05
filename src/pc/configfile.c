@@ -11,6 +11,7 @@ extern int isspace(int c);
 #endif
 
 #include "configfile.h"
+#include "fs_utils.h"
 
 #define ARRAY_LEN(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -153,13 +154,18 @@ static unsigned int tokenize_string(char *str, int maxTokens, char **tokens) {
 void configfile_load(const char *filename) {
     FILE *file;
     char *line;
+    char path[FS_MAX_PATH];
 
-    printf("Loading configuration from '%s'\n", filename);
+    fs_resolve_path(path, sizeof(path), filename);
+    printf("Loading configuration from '%s'\n", path);
 
-    file = fopen(filename, "r");
+    file = fopen(path, "r");
+    if (file == NULL && strcmp(path, filename) != 0) {
+        file = fopen(filename, "r");
+    }
     if (file == NULL) {
         // Create a new config file and save defaults
-        printf("Config file '%s' not found. Creating it.\n", filename);
+        printf("Config file '%s' not found. Creating it.\n", path);
         configfile_save(filename);
         return;
     }
@@ -226,10 +232,13 @@ void configfile_load(const char *filename) {
 // Writes the config file to 'filename'
 void configfile_save(const char *filename) {
     FILE *file;
+    char path[FS_MAX_PATH];
 
-    printf("Saving configuration to '%s'\n", filename);
+    fs_resolve_path(path, sizeof(path), filename);
+    fs_prepare_parent_path(filename);
+    printf("Saving configuration to '%s'\n", path);
 
-    file = fopen(filename, "w");
+    file = fopen(path, "w");
     if (file == NULL) {
         // error
         return;

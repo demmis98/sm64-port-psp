@@ -23,6 +23,8 @@ TARGET_N64 ?= 0
 TARGET_WEB ?= 0
 # Build for PSP
 TARGET_PSP ?= 0
+# Enable gprof profiling for PSP builds (only works with TARGET_PSP=1)
+PROFILE_PSP ?= 0
 # Compiler to use (ido or gcc)
 #COMPILER ?= ido
 
@@ -503,7 +505,15 @@ ifeq ($(TARGET_PSP),1)
   # Notes from neo
   #-gdwarf-2 -gstrict-dwarf -g3 --ffunction-sections -fdata-sections -Wl,-gc-sections
   PLATFORM_CFLAGS  := -DTARGET_PSP -DPSP -D__PSP__ -DSRC_VER=\"$(SRC_VER)\" -I$(PSPSDK_PREFIX)/include -G0 -D_PSP_FW_VERSION=500 -DNDEBUG -O3 -falign-functions=64 -flimit-function-alignment -g3 -fno-rounding-math -ffp-contract=off -Wfatal-errors -fsigned-char
-  PLATFORM_LDFLAGS := -I$(PSPSDK_PREFIX)/lib -specs=$(PSPSDK_PREFIX)/lib/prxspecs -Wl,-q,-T$(PSPSDK_PREFIX)/lib/linkfile.prx $(PSPSDK_PREFIX)/lib/prxexports.o
+  PLATFORM_LDFLAGS := -L$(PSPSDK_PREFIX)/lib
+  
+  ifeq ($(PROFILE_PSP),1)
+    # gprof builds run as ELF EBOOTs, not PRX modules.
+    PLATFORM_CFLAGS  += -pg
+    PLATFORM_LDFLAGS += -pg
+  else
+    PLATFORM_LDFLAGS += -specs=$(PSPSDK_PREFIX)/lib/prxspecs -Wl,-q,-T$(PSPSDK_PREFIX)/lib/linkfile.prx $(PSPSDK_PREFIX)/lib/prxexports.o
+  endif
 endif
 ifeq ($(TARGET_WEB),1)
   PLATFORM_CFLAGS  := -DTARGET_WEB
@@ -529,7 +539,7 @@ ifeq ($(ENABLE_OPENGL),1)
     GFX_LDFLAGS += -lGL -lSDL2
   endif
   ifeq ($(TARGET_PSP),1)
-    GFX_LDFLAGS += -L$(PSPSDK_PREFIX)/lib src/pc/libME.a src/pc/gfx/libpspmath.a -lpspdebug  -lpspgu -lpspvfpu -lpspctrl -lpspge -lpspdisplay -lpsphprm -lm -lpspsdk -lpsprtc -lpspaudio -lpsputility -lpspnet_inet -lpsppower -lc -lpspuser -lpspvram  
+    GFX_LDFLAGS += -L$(PSPSDK_PREFIX)/lib -lpspdebug  -lpspgu -lpspvfpu -lpspctrl -lpspge -lpspdisplay -lpsphprm -lm -lpspsdk -lpsprtc -lpspaudio -lpsputility -lpspnet_inet -lpsppower -lc -lpspuser -lpspvram  
   endif
 endif
 ifeq ($(ENABLE_DX11),1)
@@ -883,7 +893,9 @@ $(EXE): $(O_FILES) $(MIO0_FILES:.mio0=.o) $(SOUND_OBJ_FILES) $(ULTRA_O_FILES) $(
 	$(LD) -L $(BUILD_DIR) -o $@ $(O_FILES) $(SOUND_OBJ_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS)
 ifeq ($(TARGET_PSP),1)
 	psp-fixup-imports $@
-	psp-prxgen $@ $@.prx
+	@if [ "$(PROFILE_PSP)" != "1" ]; then \
+		psp-prxgen $@ $@.prx; \
+	fi
 
 TITLE := "sm64-port $(SRC_VER)"
 
@@ -891,7 +903,11 @@ pbp: $(EXE)
 	@mkdir -p $(BUILD_DIR)/mario64
 	cp psp/snd_eng.prx $(BUILD_DIR)/mario64/
 	mksfoex -d MEMSIZE=1 $(TITLE) $(BUILD_DIR)/PARAM.SFO
-	pack-pbp $(BUILD_DIR)/mario64/EBOOT.PBP $(BUILD_DIR)/PARAM.SFO psp/EBOOT/ICON0.png NULL NULL psp/EBOOT/PIC0.png psp/EBOOT/SND0.at3 $(EXE).prx NULL
+	@if [ "$(PROFILE_PSP)" = "1" ]; then \
+		pack-pbp $(BUILD_DIR)/mario64/EBOOT.PBP $(BUILD_DIR)/PARAM.SFO psp/EBOOT/ICON0.png NULL NULL psp/EBOOT/PIC0.png psp/EBOOT/SND0.at3 $(EXE) NULL; \
+	else \
+		pack-pbp $(BUILD_DIR)/mario64/EBOOT.PBP $(BUILD_DIR)/PARAM.SFO psp/EBOOT/ICON0.png NULL NULL psp/EBOOT/PIC0.png psp/EBOOT/SND0.at3 $(EXE).prx NULL; \
+	fi
 
 .PHONY: pbp
 endif
@@ -909,5 +925,3 @@ MAKEFLAGS += --no-builtin-rules
 -include $(DEP_FILES)
 
 print-% : ; $(info $* is a $(flavor $*) variable set to [$($*)]) @true
-
-

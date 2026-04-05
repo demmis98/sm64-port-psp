@@ -96,6 +96,9 @@ struct TextureHashmapNode {
     
     uint32_t texture_id;
     uint8_t cms, cmt;
+#if defined(TARGET_PSP)
+    uint8_t mirror_s, mirror_t;
+#endif
     bool linear_filter;
 } __attribute__((packed, aligned(4)));
 static struct {
@@ -198,6 +201,85 @@ static size_t buf_vbo_num_tris;
 
 static struct GfxWindowManagerAPI *gfx_wapi;
 static struct GfxRenderingAPI *gfx_rapi;
+
+#if defined(TARGET_PSP)
+static uint8_t psp_texture_stage_buf[256 * 256 * 4] __attribute__((aligned(16)));
+
+static const uint8_t *gfx_prepare_psp_texture_for_upload(const uint8_t *src, uint32_t width, uint32_t height, unsigned int type, bool mirror_s, bool mirror_t, uint32_t *upload_width, uint32_t *upload_height, bool *applied_mirror_s, bool *applied_mirror_t) {
+    const size_t bytes_per_pixel = type == GU_PSM_5551 ? 2 : 4;
+    const uint32_t source_x_offset = mirror_s ? width : 0;
+    const uint32_t source_y_offset = mirror_t ? height : 0;
+
+    *applied_mirror_s = mirror_s;
+    *applied_mirror_t = mirror_t;
+    *upload_width = width * (mirror_s ? 2 : 1);
+    *upload_height = height * (mirror_t ? 2 : 1);
+
+    if (!mirror_s && !mirror_t) {
+        return src;
+    }
+
+    if ((size_t)(*upload_width) * (*upload_height) * bytes_per_pixel > sizeof(psp_texture_stage_buf)) {
+        *upload_width = width;
+        *upload_height = height;
+        *applied_mirror_s = false;
+        *applied_mirror_t = false;
+        return src;
+    }
+
+    const size_t src_row_bytes = (size_t)width * bytes_per_pixel;
+    const size_t dst_row_bytes = (size_t)(*upload_width) * bytes_per_pixel;
+
+    memset(psp_texture_stage_buf, 0, (size_t)(*upload_width) * (*upload_height) * bytes_per_pixel);
+
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t *src_row = src + (size_t)y * src_row_bytes;
+        uint8_t *dst_row = psp_texture_stage_buf + (size_t)(source_y_offset + y) * dst_row_bytes + (size_t)source_x_offset * bytes_per_pixel;
+
+        memcpy(dst_row, src_row, src_row_bytes);
+
+        if (mirror_s) {
+            uint8_t *dst_mirror_row = psp_texture_stage_buf + (size_t)(source_y_offset + y) * dst_row_bytes;
+            for (uint32_t x = 0; x < width; x++) {
+                memcpy(dst_mirror_row + (size_t)x * bytes_per_pixel,
+                       src_row + (size_t)(width - 1 - x) * bytes_per_pixel,
+                       bytes_per_pixel);
+            }
+        }
+    }
+
+    if (mirror_t) {
+        const uint32_t mirror_y_offset = source_y_offset ? 0 : height;
+        for (uint32_t y = 0; y < height; y++) {
+            memcpy(psp_texture_stage_buf + (size_t)(mirror_y_offset + y) * dst_row_bytes,
+                   psp_texture_stage_buf + (size_t)(source_y_offset + height - 1 - y) * dst_row_bytes,
+                   dst_row_bytes);
+        }
+    }
+
+    return psp_texture_stage_buf;
+}
+
+static void gfx_upload_texture(int tile, const uint8_t *buf, uint32_t width, uint32_t height, unsigned int type) {
+    const bool mirror_s = (rdp.texture_tile.cms & G_TX_MIRROR) != 0;
+    const bool mirror_t = (rdp.texture_tile.cmt & G_TX_MIRROR) != 0;
+    uint32_t upload_width = width;
+    uint32_t upload_height = height;
+    bool applied_mirror_s = false;
+    bool applied_mirror_t = false;
+    const uint8_t *upload_buf = gfx_prepare_psp_texture_for_upload(buf, width, height, type, mirror_s, mirror_t, &upload_width, &upload_height, &applied_mirror_s, &applied_mirror_t);
+
+    rendering_state.textures[tile]->mirror_s = applied_mirror_s;
+    rendering_state.textures[tile]->mirror_t = applied_mirror_t;
+
+    gfx_rapi->upload_texture(upload_buf, upload_width, upload_height, type);
+}
+#else
+static void gfx_upload_texture(int tile, const uint8_t *buf, uint32_t width, uint32_t height, unsigned int type) {
+    _UNUSED(tile);
+    gfx_rapi->upload_texture(buf, width, height, type);
+}
+#endif
 
 #if defined(TARGET_PSP)
 #include <pspthreadman.h>
@@ -507,10 +589,18 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
     size_t hash = (uintptr_t)orig_addr;
     hash = (hash >> 5) & 0x3ff;
     struct TextureHashmapNode **node = &gfx_texture_cache.hashmap[hash];
+#if defined(TARGET_PSP)
+    const uint8_t mirror_s = (rdp.texture_tile.cms & G_TX_MIRROR) != 0;
+    const uint8_t mirror_t = (rdp.texture_tile.cmt & G_TX_MIRROR) != 0;
+#endif
     while (*node != NULL && *node - gfx_texture_cache.pool < (int)gfx_texture_cache.pool_pos) {
-        if ((*node)->texture_addr == orig_addr && (*node)->fmt == fmt && (*node)->siz == siz) {
+        if ((*node)->texture_addr == orig_addr && (*node)->fmt == fmt && (*node)->siz == siz
+#if defined(TARGET_PSP)
+            && (*node)->mirror_s == mirror_s && (*node)->mirror_t == mirror_t
+#endif
+        ) {
             gfx_rapi->select_texture(tile, (*node)->texture_id);
-            gfx_rapi->set_sampler_parameters(0, (*node)->linear_filter, (*node)->cms, (*node)->cmt);
+            gfx_rapi->set_sampler_parameters(tile, (*node)->linear_filter, (*node)->cms, (*node)->cmt);
             *n = *node;
             return true;
         }
@@ -542,6 +632,10 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
     (*node)->cms = 0;
     (*node)->cmt = 0;
     (*node)->linear_filter = false;
+#if defined(TARGET_PSP)
+    (*node)->mirror_s = mirror_s;
+    (*node)->mirror_t = mirror_t;
+#endif
     (*node)->next = NULL;
     (*node)->texture_addr = orig_addr;
     (*node)->fmt = fmt;
@@ -564,13 +658,13 @@ static void import_texture_rgba16(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes / 2;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
 
-    gfx_rapi->upload_texture((const uint8_t*)rgba16_buf, width, height, GU_PSM_5551);
+    gfx_upload_texture(tile, (const uint8_t *)rgba16_buf, width, height, GU_PSM_5551);
 }
 
 static void import_texture_rgba32(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes / 2;
     uint32_t height = (rdp.loaded_texture[tile].size_bytes / 2) / rdp.texture_tile.line_size_bytes;
-    gfx_rapi->upload_texture(rdp.loaded_texture[tile].addr, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rdp.loaded_texture[tile].addr, width, height, GU_PSM_8888);
 }
 
 static void import_texture_ia4(int tile) {
@@ -593,7 +687,7 @@ static void import_texture_ia4(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes * 2;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
     
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 static void import_texture_ia8(int tile) {
@@ -614,7 +708,7 @@ static void import_texture_ia8(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
     
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 static void import_texture_ia16(int tile) {
@@ -635,7 +729,7 @@ static void import_texture_ia16(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes / 2;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
     
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 static void import_texture_i4(int tile) {
@@ -657,7 +751,7 @@ static void import_texture_i4(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes * 2;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
 
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 static void import_texture_i8(int tile) {
@@ -677,7 +771,7 @@ static void import_texture_i8(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
 
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 
@@ -701,7 +795,7 @@ static void import_texture_ci4(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes * 2;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
     
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 static void import_texture_ci8(int tile) {
@@ -723,7 +817,7 @@ static void import_texture_ci8(int tile) {
     uint32_t width = rdp.texture_tile.line_size_bytes;
     uint32_t height = rdp.loaded_texture[tile].size_bytes / rdp.texture_tile.line_size_bytes;
     
-    gfx_rapi->upload_texture(rgba32_buf, width, height, GU_PSM_8888);
+    gfx_upload_texture(tile, rgba32_buf, width, height, GU_PSM_8888);
 }
 
 static void import_texture(int tile) {
@@ -1207,8 +1301,8 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     }
     
     bool use_texture = used_textures[0] || used_textures[1];
-    uint32_t tex_width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
-    uint32_t tex_height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+    float tex_width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4.0f;
+    float tex_height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4.0f;
     
     size_t i;
     for (i = 0; i < clipped_vertices_num; i++) {

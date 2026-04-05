@@ -98,11 +98,9 @@ static void render_fps(void) {
 
     if ((gPlayer1Controller->buttonPressed & R_TRIG) && (gPlayer1Controller->buttonPressed & Z_TRIG)) {
         gDoDither ^= 1;
-        extern void init_mediaengine(void);
         extern void kill_audiomanager(void);
         extern void init_audiomanager(void);
         kill_audiomanager();
-        init_mediaengine();
         init_audiomanager();
         mediaengine_available = 0;
         mediaengine_sound = 0;

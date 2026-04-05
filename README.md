@@ -46,6 +46,23 @@ Notes:Currently only supported building under linux and WSL
 3. Run `make TARGET_PSP=1`
 4. Optionally if you would prefer an EBOOT.PBP for use on CFW Run `make TARGET_PSP=1 pbp` , and the folder `mario64` will be made in the build folder.
 
+##### PSP Profiling with gprof
+
+To identify performance bottlenecks in the PSP port, you can build with gprof profiling support:
+
+1. Build with profiling enabled: `make TARGET_PSP=1 PROFILE_PSP=1`
+2. Optionally create an EBOOT.PBP with profiling: `make TARGET_PSP=1 PROFILE_PSP=1 pbp`
+3. Run the profiled executable on your PSP or emulator
+4. The profiling data will be written to `gmon.out` when the executable exits or is properly terminated
+5. Transfer `gmon.out` back to your development machine
+6. Analyze the profiling data using `gprof`:
+   ```bash
+   gprof build/us_psp/sm64.us gmon.out > profile_report.txt
+   ```
+7. The `profile_report.txt` file will contain detailed call graph and timing information
+
+**Note:** Profiling adds overhead and will increase compilation time and executable size. Use this mode only when you need to optimize performance. **When profiling is enabled, the PBP will use the ELF directly instead of a PRX file.**
+
 Windows Possible Guide: NOTE UNSUPPORTED currently
 1. Install the PSP toolchain https://darksectordds.github.io/html/MinimalistPSPSDK/index.html
 2. Install Python3 from python.org, NOT the Windows Store

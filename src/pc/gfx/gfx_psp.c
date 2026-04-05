@@ -13,7 +13,6 @@
 #include <pspgum.h>
 #include <psprtc.h>
 
-#include "../melib.h"
 #include "../psp_audio_stack.h"
 
 #define GFX_API_NAME "PSP - sceGU"
@@ -41,7 +40,6 @@ int isspace(int _c) {
 }
 
 static int exitCallback(UNUSED int arg1, UNUSED int arg2, UNUSED void *common) {
-    J_Cleanup();
     sceKernelTerminateDeleteThread(audio_manager_thid);
     sceKernelExitGame();
     return 0;
@@ -58,15 +56,7 @@ static int callbackThread(UNUSED SceSize args, UNUSED void *argp) {
     return 0;
 }
 
-void init_mediaengine(void) {
-    if(!J_Init(false)){
-        /* Init success, lets enable it! */
-        extern int mediaengine_available;
-        extern int volatile mediaengine_sound;
-        mediaengine_available = 1;
-        mediaengine_sound = 1;
-    }
-}
+
 
 void init_audiomanager(void) {
     extern int audioOutput(SceSize args, void *argp);
@@ -76,7 +66,6 @@ void init_audiomanager(void) {
 }
 
 void kill_audiomanager(void) {
-    J_Cleanup();
     sceKernelTerminateDeleteThread(audio_manager_thid);
     sceKernelDelayThread(250);
 }
@@ -92,7 +81,6 @@ static void gfx_psp_init(UNUSED const char *game_name, UNUSED bool start_in_full
 
     scePowerSetClockFrequency(333, 333, 166);
     sceKernelDelayThread(250);
-    init_mediaengine();
 
     pspDebugScreenInitEx(0, PSP_DISPLAY_PIXEL_FORMAT_8888, 0);
     last_time = sceKernelGetSystemTimeLow();

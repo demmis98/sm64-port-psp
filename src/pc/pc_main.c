@@ -42,7 +42,7 @@
 #endif
 
 PSP_MODULE_INFO(MODULE_NAME, 0, 1, 1);
-PSP_HEAP_SIZE_MAX();
+PSP_HEAP_SIZE_KB(-1024);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 
 const char _srcver[] __attribute__((section (".version"), used)) = MODULE_NAME " - " SRC_VER ;
@@ -93,17 +93,13 @@ void send_display_list(struct SPTask *spTask) {
 #endif
 
 #if defined(TARGET_PSP)
-/* This flag enables use of the MediaEngine */
-#define ME_EXEC
+
 
 #include "psp_audio_stack.h"
 #include "sceGuDebugPrint.h"
-#ifdef ME_EXEC
-#include "melib.h"
-static struct Job j __attribute__((aligned(64)));
-#else 
+
 typedef int JobData;
-#endif
+
 
 static s16 audio_buffer[SAMPLES_HIGH * 2 * 2] __attribute__((aligned(64)));
 extern struct Stack* stack;
@@ -127,17 +123,6 @@ int audioOutput(SceSize args, void *argp) {
     char buffer[64];
 #endif
 
-#ifdef ME_EXEC
-    if(mediaengine_available) {
-        /* Job data for MELib */
-        j.jobInfo.id = 1;
-        j.jobInfo.execMode = MELIB_EXEC_ME;
-        j.function = run_me_audio;
-        j.data = 0;
-        sceKernelDcacheWritebackInvalidateRange(&j, sizeof(j));
-        mediaengine_sound = 1;
-    }
-#endif
 
     while (running) {
         AudioTask task = stack_pop(stack);
@@ -157,12 +142,7 @@ int audioOutput(SceSize args, void *argp) {
             case NOP:       {; sceKernelDelayThread(1000 + 1000  * (mediaengine_sound)); }break;
             case QUIT:      {; running = false; }break;
             case GENERATE:  {;
-#ifdef ME_EXEC
-            if(mediaengine_sound){
-                J_AddJob(&j);
-                J_Update(0.0f);
-            } else
-#endif
+
             {
                 run_me_audio(0);
                 sceKernelDcacheWritebackInvalidateRange(audio_buffer,sizeof(audio_buffer));

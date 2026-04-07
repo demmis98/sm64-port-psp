@@ -1034,6 +1034,26 @@ static void gfx_prepare_tri_pipeline_state(void) {
         state->tex_v_scale = 1.0f / (8.0f * (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4));
         state->tex_u_bias = (filter_bias - rdp.texture_tile.uls * 8.0f) * state->tex_u_scale;
         state->tex_v_bias = (filter_bias - rdp.texture_tile.ult * 8.0f) * state->tex_v_scale;
+#if defined(TARGET_PSP)
+        {
+            const struct TextureHashmapNode *texture_node = used_textures[0] ? rendering_state.textures[0] : rendering_state.textures[1];
+            const uint32_t tile_width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
+            const uint32_t tile_height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+
+            if (texture_node != NULL && texture_node->mirror_s && texture_node->mirror_t
+                && tile_width == 32 && tile_height == 64) {
+                if (texture_node->mirror_s) {
+                    state->tex_u_scale *= 0.5f;
+                    state->tex_u_bias = state->tex_u_bias * 0.5f + 0.5f;
+                }
+
+                if (texture_node->mirror_t) {
+                    state->tex_v_scale *= 0.5f;
+                    state->tex_v_bias = state->tex_v_bias * 0.5f + 0.5f;
+                }
+            }
+        }
+#endif
     }
 
     rendering_state.tri_pipeline_dirty = false;

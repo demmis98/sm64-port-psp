@@ -49,7 +49,8 @@ void meLibOnProcess(void) {
 
     HW_SYS_BUS_CLOCK_ENABLE = (u32)-1;
     meLibSync();
-    meCoreBusClockPreserve(0x0f);
+    //No required per 
+    //meCoreBusClockPreserve(0x0f);
 
     control->ready = 1;
     control->command = PSP_ME_COMMAND_NONE;
@@ -71,9 +72,9 @@ void meLibOnProcess(void) {
         }
 
         if (command == PSP_ME_COMMAND_GENERATE_AUDIO) {
-            meLibDcacheWritebackInvalidateAll();
+            meCoreDcacheWritebackInvalidateAll();
             run_me_audio_cpu(0);
-            meLibDcacheWritebackInvalidateAll();
+            meCoreDcacheWritebackInvalidateAll();
         }
 
         control->command = PSP_ME_COMMAND_NONE;

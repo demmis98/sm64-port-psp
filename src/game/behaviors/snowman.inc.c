@@ -166,7 +166,8 @@ void bhv_snowmans_head_init(void) {
     s8 sp36;
 
     sp37 = save_file_get_star_flags(gCurrSaveFileNum - 1, gCurrCourseNum - 1);
-    sp36 = (o->oBehParams >> 24) & 0xFF;
+    //sp36 = (o->oBehParams >> 24) & 0xFF;
+    sp36 = *((u8 *) &o->oBehParams);
 
     cur_obj_scale(0.7f);
 

@@ -12,7 +12,8 @@ void bhv_checkerboard_elevator_group_init(void) {
     if (o->oBehParams2ndByte == 0)
         o->oBehParams2ndByte = 65;
     sp3C = o->oBehParams2ndByte * 10;
-    sp34 = (o->oBehParams >> 24) & 0XFF;
+    //sp34 = (o->oBehParams >> 24) & 0XFF;
+    sp34 = *((u8 *) &o->oBehParams);
     for (i = 0; i < 2; i++) {
         if (i == 0)
             sp38 = -D_8032F754[sp34].unk0;

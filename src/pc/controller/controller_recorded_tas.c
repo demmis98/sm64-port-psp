@@ -5,7 +5,7 @@
 
 static FILE *fp;
 
-#define FILE_PREFIX ""
+#define FILE_PREFIX "./"
 
 static void tas_init(void) {
     fp = fopen(FILE_PREFIX"cont.m64", "rb");

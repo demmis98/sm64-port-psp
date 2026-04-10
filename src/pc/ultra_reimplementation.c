@@ -12,7 +12,7 @@
 #include <emscripten.h>
 #endif
 
-#define FILE_PREFIX ""
+#define FILE_PREFIX "./"
 
 extern OSMgrArgs piMgrArgs;
 

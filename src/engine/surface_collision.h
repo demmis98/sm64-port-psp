@@ -6,7 +6,7 @@
 #include "types.h"
 
 #define LEVEL_BOUNDARY_MAX 0x2000
-#define CELL_SIZE          0x400
+#define CELL_SIZE          10
 
 struct WallCollisionData
 {

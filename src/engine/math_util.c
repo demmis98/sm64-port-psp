@@ -490,48 +490,82 @@ void mtxf_align_terrain_triangle(Mat4 mtx, Vec3f pos, s16 yaw, f32 radius) {
  * then a.
  */
 void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {
-    Mat4 temp;
-    register f32 entry0;
-    register f32 entry1;
-    register f32 entry2;
+    __asm__ volatile (
 
-    // column 0
-    entry0 = a[0][0];
-    entry1 = a[0][1];
-    entry2 = a[0][2];
-    temp[0][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0];
-    temp[0][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1];
-    temp[0][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2];
+        // Load A rows
+        "lv.q   C000, 0(%0)\n"
+        "lv.q   C010, 16(%0)\n"
+        "lv.q   C020, 32(%0)\n"
+        "lv.q   C030, 48(%0)\n"
 
-    // column 1
-    entry0 = a[1][0];
-    entry1 = a[1][1];
-    entry2 = a[1][2];
-    temp[1][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0];
-    temp[1][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1];
-    temp[1][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2];
+        // Load B rows
+        "lv.q   C100, 0(%1)\n"
+        "lv.q   C110, 16(%1)\n"
+        "lv.q   C120, 32(%1)\n"
+        "lv.q   C130, 48(%1)\n"
 
-    // column 2
-    entry0 = a[2][0];
-    entry1 = a[2][1];
-    entry2 = a[2][2];
-    temp[2][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0];
-    temp[2][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1];
-    temp[2][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2];
+        // ---- Build B columns manually ----
+        // Column 0 → C200
+        "vmov.t C200, C100\n"   // x
+        "vmov.s S201, S110\n"   // y
+        "vmov.s S202, S120\n"   // z
 
-    // column 3
-    entry0 = a[3][0];
-    entry1 = a[3][1];
-    entry2 = a[3][2];
-    temp[3][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0] + b[3][0];
-    temp[3][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1] + b[3][1];
-    temp[3][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2] + b[3][2];
+        // Column 1 → C210
+        "vmov.t C210, C100\n"
+        "vmov.s S210, S101\n"
+        "vmov.s S211, S111\n"
+        "vmov.s S212, S121\n"
 
-    temp[0][3] = temp[1][3] = temp[2][3] = 0;
-    temp[3][3] = 1;
+        // Column 2 → C220
+        "vmov.t C220, C100\n"
+        "vmov.s S220, S102\n"
+        "vmov.s S221, S112\n"
+        "vmov.s S222, S122\n"
 
-    mtxf_copy(dest, temp);
+        // ---- Multiply ----
+
+        // Row 0
+        "vdot.t S300, C000, C200\n"
+        "vdot.t S301, C000, C210\n"
+        "vdot.t S302, C000, C220\n"
+
+        // Row 1
+        "vdot.t S310, C010, C200\n"
+        "vdot.t S311, C010, C210\n"
+        "vdot.t S312, C010, C220\n"
+
+        // Row 2
+        "vdot.t S320, C020, C200\n"
+        "vdot.t S321, C020, C210\n"
+        "vdot.t S322, C020, C220\n"
+
+        // Row 3
+        "vdot.t S330, C030, C200\n"
+        "vdot.t S331, C030, C210\n"
+        "vdot.t S332, C030, C220\n"
+
+        // Add translation
+        "vadd.t C330, C330, C130\n"
+
+
+        // Set final row
+        "vzero.s  S303\n"
+        "vzero.s  S313\n"
+        "vzero.s  S323\n"
+        "vone.s  S333\n"   // 1.0
+
+        // Store result
+        "sv.q   C300, 0(%2)\n"
+        "sv.q   C310, 16(%2)\n"
+        "sv.q   C320, 32(%2)\n"
+        "sv.q   C330, 48(%2)\n"
+
+        :
+        : "r"(a), "r"(b), "r"(dest)
+        : "memory"
+    );
 }
+
 
 /**
  * Set matrix 'dest' to 'mtx' scaled by vector s
@@ -553,13 +587,41 @@ void mtxf_scale_vec3f(Mat4 dest, Mat4 mtx, Vec3f s) {
  * true for transformation matrices if the translation has a w component of 1.
  */
 void mtxf_mul_vec3s(Mat4 mtx, Vec3s b) {
-    register f32 x = b[0];
-    register f32 y = b[1];
-    register f32 z = b[2];
+    float x = b[0];
+    float y = b[1];
+    float z = b[2];
 
-    b[0] = x * mtx[0][0] + y * mtx[1][0] + z * mtx[2][0] + mtx[3][0];
-    b[1] = x * mtx[0][1] + y * mtx[1][1] + z * mtx[2][1] + mtx[3][1];
-    b[2] = x * mtx[0][2] + y * mtx[1][2] + z * mtx[2][2] + mtx[3][2];
+    __asm__ volatile (
+        // Load matrix rows
+        "lv.q   C000, 0(%0)\n"     // row 0
+        "lv.q   C010, 16(%0)\n"    // row 1
+        "lv.q   C020, 32(%0)\n"    // row 2
+        "lv.q   C030, 48(%0)\n"    // row 3 (translation)
+
+        // Load vector into C100 = (x, y, z, 1)
+        "mtv    %1, S100\n"
+        "mtv    %2, S101\n"
+        "mtv    %3, S102\n"
+        "vone.s S103\n"
+
+        // Dot products
+        "vdot.q S200, C000, C100\n"
+        "vdot.q S201, C010, C100\n"
+        "vdot.q S202, C020, C100\n"
+
+        // Store results back
+        "mfv    %1, S200\n"
+        "mfv    %2, S201\n"
+        "mfv    %3, S202\n"
+
+        : "+r"(x), "+r"(y), "+r"(z)
+        : "r"(mtx)
+        : "memory"
+    );
+
+    b[0] = (s16)x;
+    b[1] = (s16)y;
+    b[2] = (s16)z;
 }
 
 /**

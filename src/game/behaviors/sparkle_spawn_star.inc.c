@@ -16,7 +16,8 @@ void bhv_spawned_star_init(void) {
     s32 sp24;
     if (!(o->oInteractionSubtype & INT_SUBTYPE_NO_EXIT))
         o->oBehParams = o->parentObj->oBehParams;
-    sp24 = (o->oBehParams >> 24) & 0xFF;
+    //sp24 = (o->oBehParams >> 24) & 0xFF;
+    sp24 = *((u8 *) &o->oBehParams);
     if (bit_shift_left(sp24) & save_file_get_star_flags(gCurrSaveFileNum - 1, gCurrCourseNum - 1))
         cur_obj_set_model(MODEL_TRANSPARENT_STAR);
     cur_obj_play_sound_2(SOUND_GENERAL2_STAR_APPEARS);

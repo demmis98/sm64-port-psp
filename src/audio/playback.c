@@ -978,18 +978,19 @@ void reclaim_notes(void) {
     s32 i;
     s32 cond;
 
+    note = gNotes;
+
     for (i = 0; i < gMaxSimultaneousNotes; i++) {
-        note = &gNotes[i];
         /* Hit a null pointer here once */
-        if ((note->parentLayer != NO_LAYER) && (note->parentLayer != NULL) ) {
+        if ((note->parentLayer != NO_LAYER) && note->parentLayer) {
             cond = FALSE;
             if (!note->parentLayer->enabled && note->priority >= NOTE_PRIORITY_MIN) {
                 cond = TRUE;
-            } else if (note->parentLayer->seqChannel == NULL) {
+            } else if (!note->parentLayer->seqChannel) {
                 audio_list_push_back(&gLayerFreeList, &note->parentLayer->listItem);
                 seq_channel_layer_disable(note->parentLayer);
                 note->priority = NOTE_PRIORITY_STOPPING;
-            } else if (note->parentLayer->seqChannel->seqPlayer == NULL) {
+            } else if (!note->parentLayer->seqChannel->seqPlayer) {
                 sequence_channel_disable(note->parentLayer->seqChannel);
                 note->priority = NOTE_PRIORITY_STOPPING;
             } else if (note->parentLayer->seqChannel->seqPlayer->muted) {
@@ -1008,6 +1009,7 @@ void reclaim_notes(void) {
                 note->priority = NOTE_PRIORITY_STOPPING;
             }
         }
+        note++;
     }
 }
 #endif

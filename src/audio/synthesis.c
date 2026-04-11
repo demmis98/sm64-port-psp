@@ -313,7 +313,7 @@ u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) {
     s32 i;
     u32 *aiBufPtr = (u32 *) aiBuf;
     u64 *cmd = cmdBuf + 1;
-    s32 v0;
+    s32 v0, v_t;
 
     aSegment(cmdBuf, 0, 0);
 
@@ -323,10 +323,11 @@ u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) {
             chunkLen = bufLen;
         } else {
             v0 = bufLen / i;
+            v_t = v0 & 7;
             // chunkLen = v0 rounded to nearest multiple of 8
-            chunkLen = v0 - (v0 & 7);
+            chunkLen = v0 - v_t;
 
-            if ((v0 & 7) >= 4) {
+            if (v_t >= 4) {
                 chunkLen += 8;
             }
         }

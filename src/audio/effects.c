@@ -80,7 +80,7 @@ static void sequence_channel_process_sound(struct SequenceChannel *seqChannel) {
 void sequence_player_process_sound(struct SequencePlayer *seqPlayer) {
     s32 i;
 
-    if (seqPlayer->fadeTimer != 0) {
+    if (seqPlayer->fadeTimer) {
         seqPlayer->fadeVolume += seqPlayer->fadeVelocity;
 #ifdef VERSION_EU
         seqPlayer->recalculateVolume = TRUE;
@@ -93,7 +93,7 @@ void sequence_player_process_sound(struct SequencePlayer *seqPlayer) {
             seqPlayer->fadeVolume = 0;
         }
 
-        if (--seqPlayer->fadeTimer == 0) {
+        if (!--seqPlayer->fadeTimer) {
 #ifdef VERSION_EU
             if (seqPlayer->state == 2) {
                 sequence_player_disable(seqPlayer);

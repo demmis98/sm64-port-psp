@@ -1553,11 +1553,11 @@ void sequence_player_process_sequence(struct SequencePlayer *seqPlayer) {
     s32 temp32;
 #endif
 
-    if (seqPlayer->enabled == FALSE) {
+    if (!seqPlayer->enabled) {
         return;
     }
 
-    if (seqPlayer->bankDmaInProgress == TRUE) {
+    if (seqPlayer->bankDmaInProgress) {
 #ifdef VERSION_EU
         if (osRecvMesg(&seqPlayer->bankDmaMesgQueue, NULL, 0) == -1) {
             return;
@@ -1577,10 +1577,10 @@ void sequence_player_process_sequence(struct SequencePlayer *seqPlayer) {
                                          &seqPlayer->bankDmaIoMesg);
         }
 #else
-        if (seqPlayer->bankDmaMesg == NULL) {
+        if (!seqPlayer->bankDmaMesg) {
             return;
         }
-        if (seqPlayer->bankDmaRemaining == 0) {
+        if (!seqPlayer->bankDmaRemaining) {
             seqPlayer->bankDmaInProgress = FALSE;
             patch_audio_bank(seqPlayer->loadingBank, gAlTbl->seqArray[seqPlayer->loadingBankId].offset,
                           seqPlayer->loadingBankNumInstruments, seqPlayer->loadingBankNumDrums);
@@ -1600,7 +1600,7 @@ void sequence_player_process_sequence(struct SequencePlayer *seqPlayer) {
         return;
     }
 
-    if (seqPlayer->seqDmaInProgress == TRUE) {
+    if (seqPlayer->seqDmaInProgress) {
 #ifdef VERSION_EU
         if (osRecvMesg(&seqPlayer->seqDmaMesgQueue, NULL, 0) == -1) {
             return;
@@ -1610,7 +1610,7 @@ void sequence_player_process_sequence(struct SequencePlayer *seqPlayer) {
         }
 #endif
 #else
-        if (seqPlayer->seqDmaMesg == NULL) {
+        if (!seqPlayer->seqDmaMesg) {
             return;
         }
 #endif
@@ -1619,8 +1619,8 @@ void sequence_player_process_sequence(struct SequencePlayer *seqPlayer) {
     }
 
     // If discarded, bail out.
-    if (IS_SEQ_LOAD_COMPLETE(seqPlayer->seqId) == FALSE
-        || IS_BANK_LOAD_COMPLETE(seqPlayer->defaultBank[0]) == FALSE) {
+    if (!IS_SEQ_LOAD_COMPLETE(seqPlayer->seqId)
+        || !IS_BANK_LOAD_COMPLETE(seqPlayer->defaultBank[0])) {
         sequence_player_disable(seqPlayer);
         return;
     }
@@ -1988,16 +1988,18 @@ void sequence_player_process_sequence(struct SequencePlayer *seqPlayer) {
 // This runs 240 times per second.
 void process_sequences(UNUSED s32 iterationsRemaining) {
     s32 i;
+    struct SequencePlayer *gSP_t = gSequencePlayers;
     for (i = 0; i < SEQUENCE_PLAYERS; i++) {
-        if (gSequencePlayers[i].enabled == TRUE) {
+        if (gSP_t->enabled) {
 #ifdef VERSION_EU
-            sequence_player_process_sequence(&gSequencePlayers[i]);
-            sequence_player_process_sound(&gSequencePlayers[i]);
+            sequence_player_process_sequence(gSP_t);
+            sequence_player_process_sound(gSP_t);
 #else
             sequence_player_process_sequence(gSequencePlayers + i);
             sequence_player_process_sound(gSequencePlayers + i);
 #endif
         }
+        gSP_t++;
     }
 #ifndef VERSION_EU
     reclaim_notes();

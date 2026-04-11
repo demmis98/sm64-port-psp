@@ -24,6 +24,8 @@ static int force_30fps = 1;
 static unsigned int last_time = 0;
 int audio_manager_thid = 0; 
 
+#define IGNORE_CLOCK
+
 /* I forgot why we need this */
 void __assert_func(UNUSED const char *file, UNUSED int line, UNUSED const char *method, UNUSED const char *expression) {
 }
@@ -86,7 +88,9 @@ static void gfx_psp_init(UNUSED const char *game_name, UNUSED bool start_in_full
         sceKernelStartThread(thid, 0, 0);
     }
 
+    #ifndef IGNORE_CLOCK
     scePowerSetClockFrequency(333, 333, 166);
+    #endif
     sceKernelDelayThread(250);
 
     pspDebugScreenInitEx(0, PSP_DISPLAY_PIXEL_FORMAT_8888, 0);

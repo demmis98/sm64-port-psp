@@ -123,32 +123,63 @@ void *vec3f_to_vec3s(Vec3s dest, Vec3f a) {
  * It is similar to vec3f_cross, but it calculates the vectors (c-b) and (b-a)
  * at the same time.
  */
-void *find_vector_perpendicular_to_plane(Vec3f dest, Vec3f a, Vec3f b, Vec3f c) {
+void find_vector_perpendicular_to_plane(Vec3f dest, Vec3f a, Vec3f b, Vec3f c) {
     dest[0] = (b[1] - a[1]) * (c[2] - b[2]) - (c[1] - b[1]) * (b[2] - a[2]);
     dest[1] = (b[2] - a[2]) * (c[0] - b[0]) - (c[2] - b[2]) * (b[0] - a[0]);
     dest[2] = (b[0] - a[0]) * (c[1] - b[1]) - (c[0] - b[0]) * (b[1] - a[1]);
-    return &dest; //! warning: function returns address of local variable
 }
 
 /// Make vector 'dest' the cross product of vectors a and b.
-void *vec3f_cross(Vec3f dest, Vec3f a, Vec3f b) {
-    dest[0] = a[1] * b[2] - b[1] * a[2];
-    dest[1] = a[2] * b[0] - b[2] * a[0];
-    dest[2] = a[0] * b[1] - b[0] * a[1];
-    return &dest; //! warning: function returns address of local variable
+void vec3f_cross(Vec3f dest, Vec3f a, Vec3f b) {
+    __asm__ volatile (
+            // load a
+        "lv.s S000, 0(%1)\n"
+        "lv.s S001, 4(%1)\n"
+        "lv.s S002, 8(%1)\n"
+            // load b
+        "lv.s S010, 0(%2)\n"
+        "lv.s S011, 4(%2)\n"
+        "lv.s S012, 8(%2)\n"
+
+        "vcrsp.t C020, C000, C010\n" // cross product
+
+            // store result
+        "sv.s S020, 0(%0)\n"
+        "sv.s S021, 4(%0)\n"
+        "sv.s S022, 8(%0)\n"
+        :
+        : "r"(dest), "r"(a), "r"(b)
+        : "memory"
+    );
 }
 
 /// Scale vector 'dest' so it has length 1
-void *vec3f_normalize(Vec3f dest) {
-    //! Possible division by zero
-    f32 invsqrt = 1.0f / sqrtf(dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2]);
+void vec3f_normalize(Vec3f dest) {
+    __asm__ volatile (
+        // load vector (x,y,z,?)
+        "lv.s S000, 0(%0)\n"
+        "lv.s S001, 4(%0)\n"
+        "lv.s S002, 8(%0)\n"
 
-    dest[0] *= invsqrt;
-    dest[1] *= invsqrt;
-    dest[2] *= invsqrt;
-    return &dest; //! warning: function returns address of local variable
+
+        // dot product: S010 = x*x + y*y + z*z
+        "vdot.t  S010, C000, C000\n"
+
+        // rsqrt (fast!)
+        "vrsq.s  S010, S010\n"
+
+        // scale vector
+        "vscl.t  C000, C000, S010\n"
+
+        // store back
+        "sv.s S000, 0(%0)\n"
+        "sv.s S001, 4(%0)\n"
+        "sv.s S002, 8(%0)\n"
+        :
+        : "r"(dest)
+        : "memory"
+    );
 }
-
 #pragma GCC diagnostic pop
 
 /// Copy matrix 'src' to 'dest'
@@ -166,14 +197,20 @@ void mtxf_copy(Mat4 dest, Mat4 src) {
  * Set mtx to the identity matrix
  */
 void mtxf_identity(Mat4 mtx) {
-    register s32 i;
-    register f32 *dest;
-    // Note: These loops need to be on one line to match on PAL
-    // initialize everything except the first and last cells to 0
-    for (dest = (f32 *) mtx + 1, i = 0; i < 14; dest++, i++) *dest = 0;
-
-    // initialize the diagonal cells to 1
-    for (dest = (f32 *) mtx, i = 0; i < 4; dest += 5, i++) *dest = 1;
+    __asm__ volatile(
+        "vidt.q R100\n" //load identity matrix
+        "vidt.q R101\n"
+        "vidt.q R102\n"
+        "vidt.q R103\n"
+            
+        "sv.q   R100, 0(%0)\n"    // row 0
+        "sv.q   R101, 16(%0)\n"    // row 1
+        "sv.q   R102, 32(%0)\n"    // row 2
+        "sv.q   R103, 48(%0)\n"    // row 3
+        :
+        : "r"(mtx)
+        : "memory"
+    );
 }
 
 /**
@@ -356,6 +393,42 @@ void mtxf_billboard(Mat4 dest, Mat4 mtx, Vec3f position, s16 angle) {
     dest[2][2] = 1;
     dest[2][3] = 0;
 
+    __asm__ volatile(
+        // load matrix (mtx)
+        "lv.q   R100, 0(%1)\n"
+        "lv.q   R101, 16(%1)\n"
+        "lv.q   R102, 32(%1)\n"
+        "lv.q   R103, 48(%1)\n"
+
+        // load position (x, y, z)
+        "lv.s   S000, 0(%2)\n"
+        "lv.s   S001, 4(%2)\n"
+        "lv.s   S002, 8(%2)\n"
+        "vone.s S003\n"              // w = 1.0
+
+
+        // row0 * x
+        "vscl.q R200, R100, S000\n"
+
+        // row1 * y
+        "vscl.q R201, R101, S001\n"
+        "vadd.q R200, R200, R201\n"
+
+        // row2 * z
+        "vscl.q R201, R102, S002\n"
+        "vadd.q R200, R200, R201\n"
+
+        // + row3 (translation)
+        "vadd.q R200, R200, R103\n"
+
+        // store into dest[3]
+        "sv.q   R200, 48(%0)\n"
+
+        :
+        : "r"(dest), "r"(mtx), "r"(position)
+        : "memory"
+    );
+    /*
     dest[3][0] =
         mtx[0][0] * position[0] + mtx[1][0] * position[1] + mtx[2][0] * position[2] + mtx[3][0];
     dest[3][1] =
@@ -363,6 +436,7 @@ void mtxf_billboard(Mat4 dest, Mat4 mtx, Vec3f position, s16 angle) {
     dest[3][2] =
         mtx[0][2] * position[0] + mtx[1][2] * position[1] + mtx[2][2] * position[2] + mtx[3][2];
     dest[3][3] = 1;
+    */
 }
 
 /**
@@ -573,12 +647,37 @@ void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {
 void mtxf_scale_vec3f(Mat4 dest, Mat4 mtx, Vec3f s) {
     register s32 i;
 
+    /*
     for (i = 0; i < 4; i++) {
         dest[0][i] = mtx[0][i] * s[0];
         dest[1][i] = mtx[1][i] * s[1];
         dest[2][i] = mtx[2][i] * s[2];
         dest[3][i] = mtx[3][i];
     }
+    */
+
+    __asm__ volatile(
+        "lv.q   C000, 0(%1)\n"
+        "lv.q   C010, 16(%1)\n"
+        "lv.q   C020, 32(%1)\n"
+        "lv.q   C030, 48(%1)\n"
+
+        "lv.s   S100, 0(%2)\n"
+        "lv.s   S101, 4(%2)\n"
+        "lv.s   S102, 8(%2)\n"
+
+        "vscl.q C000, C000, S100\n"
+        "vscl.q C010, C010, S101\n"
+        "vscl.q C020, C020, S102\n"
+
+        "sv.q   C000, 0(%0)\n"
+        "sv.q   C010, 16(%0)\n"
+        "sv.q   C020, 32(%0)\n"
+        "sv.q   C030, 48(%0)\n"
+        :
+        : "r"(dest), "r"(mtx), "r"(s)
+        : "memory"
+    );
 }
 
 /**
@@ -676,16 +775,34 @@ void mtxf_rotate_xy(Mtx *mtx, s16 angle) {
  * the camera position.
  */
 void get_pos_from_transform_mtx(Vec3f dest, Mat4 objMtx, Mat4 camMtx) {
-    f32 camX = camMtx[3][0] * camMtx[0][0] + camMtx[3][1] * camMtx[0][1] + camMtx[3][2] * camMtx[0][2];
-    f32 camY = camMtx[3][0] * camMtx[1][0] + camMtx[3][1] * camMtx[1][1] + camMtx[3][2] * camMtx[1][2];
-    f32 camZ = camMtx[3][0] * camMtx[2][0] + camMtx[3][1] * camMtx[2][1] + camMtx[3][2] * camMtx[2][2];
+    __asm__ volatile (
+        // load obj position (row 3)
+        "lv.q    C000, 48(%1)\n"
 
-    dest[0] =
-        objMtx[3][0] * camMtx[0][0] + objMtx[3][1] * camMtx[0][1] + objMtx[3][2] * camMtx[0][2] - camX;
-    dest[1] =
-        objMtx[3][0] * camMtx[1][0] + objMtx[3][1] * camMtx[1][1] + objMtx[3][2] * camMtx[1][2] - camY;
-    dest[2] =
-        objMtx[3][0] * camMtx[2][0] + objMtx[3][1] * camMtx[2][1] + objMtx[3][2] * camMtx[2][2] - camZ;
+        // load cam position (row 3)
+        "lv.q    C010, 48(%2)\n"
+
+        // delta = obj - cam
+        "vsub.t  C020, C000, C010\n"
+
+        // load camera axes
+        "lv.q    C100, 0(%2)\n"    // right
+        "lv.q    C110, 16(%2)\n"   // up
+        "lv.q    C120, 32(%2)\n"   // forward
+
+        // dot products
+        "vdot.t  S200, C020, C100\n"
+        "vdot.t  S201, C020, C110\n"
+        "vdot.t  S202, C020, C120\n"
+
+        // store result
+        "sv.s    S200, 0(%0)\n"
+        "sv.s    S201, 4(%0)\n"
+        "sv.s    S202, 8(%0)\n"
+        :
+        : "r"(dest), "r"(objMtx), "r"(camMtx)
+        : "memory"
+    );
 }
 
 /**

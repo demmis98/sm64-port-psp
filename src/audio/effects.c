@@ -79,6 +79,7 @@ static void sequence_channel_process_sound(struct SequenceChannel *seqChannel) {
 
 void sequence_player_process_sound(struct SequencePlayer *seqPlayer) {
     s32 i;
+    struct SequenceChannel **channels_t;
 
     if (seqPlayer->fadeTimer) {
         seqPlayer->fadeVolume += seqPlayer->fadeVelocity;
@@ -123,16 +124,18 @@ void sequence_player_process_sound(struct SequencePlayer *seqPlayer) {
     }
 #endif
 
+    channels_t = seqPlayer->channels;
     // Process channels
     for (i = 0; i < CHANNELS_MAX; i++) {
-        if (IS_SEQUENCE_CHANNEL_VALID(seqPlayer->channels[i]) == TRUE
-            && seqPlayer->channels[i]->enabled == TRUE) {
+        if (IS_SEQUENCE_CHANNEL_VALID(channels_t)
+            && (*channels_t)->enabled) {
 #ifdef VERSION_EU
-            sequence_channel_process_sound(seqPlayer->channels[i], seqPlayer->recalculateVolume);
+            sequence_channel_process_sound(*channels_t, seqPlayer->recalculateVolume);
 #else
-            sequence_channel_process_sound(seqPlayer->channels[i]);
+            sequence_channel_process_sound(*channels_t);
 #endif
         }
+        channels_t++;
     }
 
 #ifdef VERSION_EU
@@ -140,7 +143,7 @@ void sequence_player_process_sound(struct SequencePlayer *seqPlayer) {
 #endif
 }
 
-f32 get_portamento_freq_scale(struct Portamento *p) {
+static inline f32 get_portamento_freq_scale(struct Portamento *p) {
     u32 v0;
     f32 result;
 #ifndef VERSION_EU
@@ -169,39 +172,13 @@ f32 get_portamento_freq_scale(struct Portamento *p) {
     return result;
 }
 
-#ifdef VERSION_EU
-s16 get_vibrato_pitch_change(struct VibratoState *vib) {
-    s32 index;
-    vib->time += (s32) vib->rate;
-    index = (vib->time >> 10) & 0x3F;
-    return vib->curve[index] >> 8;
-}
-#else
-s8 get_vibrato_pitch_change(struct VibratoState *vib) {
-    s32 index;
+static inline s16 get_vibrato_pitch_change(struct VibratoState *vib) {
     vib->time += vib->rate;
-
-    index = (vib->time >> 10) & 0x3F;
-
-    switch (index & 0x30) {
-        case 0x10:
-            index = 31 - index;
-
-        case 0x00:
-            return vib->curve[index];
-
-        case 0x20:
-            index -= 0x20;
-            break;
-
-        case 0x30:
-            index = 63 - index;
-            break;
-    }
-
-    return -vib->curve[index];
+    int index = (vib->time >> 10) & 0x3F;
+    int mirroredIndex = (index & 0x20) ? (63 - index) : index;
+    int sign = (index & 0x20) ? -1 : 1;
+    return sign * vib->curve[mirroredIndex];
 }
-#endif
 
 f32 get_vibrato_freq_scale(struct VibratoState *vib) {
     s32 pitchChange;

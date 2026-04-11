@@ -322,7 +322,7 @@ static inline int texenv_set_texture_color(struct ShaderProgram *prg) {
 
 static inline int texenv_set_texture_texture(UNUSED struct ShaderProgram *prg) {
     /*@Note: hack shader 0x1A00A6F for Bowser/Peach Paintings (still broken, but just fixed on peach)*/
-    return GU_TFX_DECAL;
+    return GU_TFX_MODULATE;
 }
 
 static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
@@ -333,15 +333,16 @@ static void gfx_scegu_apply_shader(struct ShaderProgram *prg) {
         sceGuDisable(GU_TEXTURE_2D);
         return;
     }
-/*@Note: Revisit one day! */
-#if 0
+
     if (prg->shader_id & SHADER_OPT_FOG) {
-        // Yea this doesnt work at all */
-        //sceGuFog(scegu_fog_near, scegu_fog_far, 0x00FF0000);//scegu_fog_color); // color is the same for all verts, only intensity is different
-        //sceGuEnable(GU_FOG);
-        sceGuEnable(GU_BLEND);
+        sceGuEnable(GU_FOG);
+
+        // Set fog parameters
+        //sceGuFog(1.0f, 10.0f, scegu_fog_color);
+        sceGuFog(3600.0f, 32000.0f, 0xFFFFFFFF);
+    } else {
+        sceGuDisable(GU_FOG);
     }
-#endif
 
     if (prg->num_inputs) {
         // have colors
@@ -403,8 +404,6 @@ static void gfx_scegu_unload_shader(struct ShaderProgram *old_prg) {
 static void gfx_scegu_load_shader(struct ShaderProgram *new_prg) {
     cur_shader = new_prg;
     gfx_scegu_apply_shader(cur_shader);
-    if (cur_shader)
-        cur_shader->enabled = false;
 }
 
 static struct ShaderProgram *gfx_scegu_create_and_load_new_shader(uint32_t shader_id) {

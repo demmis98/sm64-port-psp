@@ -24,7 +24,7 @@ static int force_30fps = 1;
 static unsigned int last_time = 0;
 int audio_manager_thid = 0; 
 
-#define IGNORE_CLOCK
+//#define IGNORE_CLOCK
 
 /* I forgot why we need this */
 void __assert_func(UNUSED const char *file, UNUSED int line, UNUSED const char *method, UNUSED const char *expression) {

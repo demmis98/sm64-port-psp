@@ -229,6 +229,28 @@ void mtxf_translate(Mat4 dest, Vec3f b) {
  * at the position 'to'. The up-vector is assumed to be (0, 1, 0), but the 'roll'
  * angle allows a bank rotation of the camera.
  */
+static inline f32 vfpu_inv_sqrt3(f32 x, f32 y, f32 z) {
+    f32 result;
+
+    __asm__ volatile (
+        "mtv    %1, S000\n"
+        "mtv    %2, S001\n"
+        "mtv    %3, S002\n"
+
+        // dot = x*x + y*y + z*z
+        "vdot.t S010, C000, C000\n"
+
+        // rsqrt
+        "vrsq.s S010, S010\n"
+
+        "mfv    %0, S010\n"
+        : "=r"(result)
+        : "r"(x), "r"(y), "r"(z)
+    );
+
+    return result;
+}
+
 void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     register f32 invLength;
     f32 dx;
@@ -246,7 +268,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     dx = to[0] - from[0];
     dz = to[2] - from[2];
 
-    invLength = -1.0 / sqrtf(dx * dx + dz * dz);
+    invLength = -vfpu_inv_sqrt3(dx, 0.0f, dz);
     dx *= invLength;
     dz *= invLength;
 
@@ -258,7 +280,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     yColZ = to[1] - from[1];
     zColZ = to[2] - from[2];
 
-    invLength = -1.0 / sqrtf(xColZ * xColZ + yColZ * yColZ + zColZ * zColZ);
+    invLength = -vfpu_inv_sqrt3(xColZ, yColZ, zColZ);
     xColZ *= invLength;
     yColZ *= invLength;
     zColZ *= invLength;
@@ -267,7 +289,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     yColX = zColY * xColZ - xColY * zColZ;
     zColX = xColY * yColZ - yColY * xColZ;
 
-    invLength = 1.0 / sqrtf(xColX * xColX + yColX * yColX + zColX * zColX);
+    invLength = vfpu_inv_sqrt3(xColX, yColX, zColX);
 
     xColX *= invLength;
     yColX *= invLength;
@@ -277,7 +299,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     yColY = zColZ * xColX - xColZ * zColX;
     zColY = xColZ * yColX - yColZ * xColX;
 
-    invLength = 1.0 / sqrtf(xColY * xColY + yColY * yColY + zColY * zColY);
+    invLength = vfpu_inv_sqrt3(xColY, yColY, zColY);
     xColY *= invLength;
     yColY *= invLength;
     zColY *= invLength;

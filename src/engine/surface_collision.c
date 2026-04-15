@@ -209,6 +209,7 @@ s32 find_wall_collisions(struct WallCollisionData *colData) {
     // Check for surfaces that are a part of level geometry.
     node = gStaticSurfacePartition[cellZ][cellX][SPATIAL_PARTITION_WALLS].next;
     numCollisions += find_wall_collisions_from_list(node, colData);
+    
 
     // Increment the debug tracker.
     gNumCalls.wall += 1;
@@ -520,9 +521,9 @@ f32 find_floor(f32 xPos, f32 yPos, f32 zPos, struct Surface **pfloor) {
     //! (Parallel Universes) Because position is casted to an s16, reaching higher
     // float locations  can return floors despite them not existing there.
     //(Dynamic floors will unload due to the range.)
-    s16 x = (s16) xPos;
-    s16 y = (s16) yPos;
-    s16 z = (s16) zPos;
+    s32 x = (s32) (xPos);
+    s32 y = (s32) (yPos);
+    s32 z = (s32) (zPos);
 
     *pfloor = NULL;
 

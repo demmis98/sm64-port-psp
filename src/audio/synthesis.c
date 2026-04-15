@@ -308,12 +308,12 @@ u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) {
 }
 #else
 // bufLen will be divisible by 16
-u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) {
+u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) { // left off here
     s32 chunkLen;
-    s32 i;
+    register s32 i;
     u32 *aiBufPtr = (u32 *) aiBuf;
     u64 *cmd = cmdBuf + 1;
-    s32 v0, v_t;
+    s32 v0;
 
     aSegment(cmdBuf, 0, 0);
 
@@ -323,18 +323,17 @@ u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) {
             chunkLen = bufLen;
         } else {
             v0 = bufLen / i;
-            v_t = v0 & 7;
             // chunkLen = v0 rounded to nearest multiple of 8
-            chunkLen = v0 - v_t;
+            chunkLen = v0 - (v0 & 7);
 
-            if (v_t >= 4) {
+            if ((v0 & 7) >= 4) {
                 chunkLen += 8;
             }
         }
-        process_sequences(i - 1);
-        if (gSynthesisReverb.useReverb != 0) {
-            prepare_reverb_ring_buffer(chunkLen, gAudioUpdatesPerFrame - i);
-        }
+        process_sequences();
+        //  if (gSynthesisReverb.useReverb != 0) {
+        prepare_reverb_ring_buffer(chunkLen, gAudioUpdatesPerFrame - i); 
+        // }
         cmd = synthesis_do_one_audio_update((s16 *) aiBufPtr, chunkLen, cmd, gAudioUpdatesPerFrame - i);
         bufLen -= chunkLen;
         aiBufPtr += chunkLen;

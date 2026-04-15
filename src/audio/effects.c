@@ -59,7 +59,7 @@ static void sequence_channel_process_sound(struct SequenceChannel *seqChannel) {
     s32 i;
 
     channelVolume = seqChannel->volume * seqChannel->volumeScale * seqChannel->seqPlayer->fadeVolume;
-    if (seqChannel->seqPlayer->muted && (seqChannel->muteBehavior & MUTE_BEHAVIOR_SOFTEN) != 0) {
+    if (seqChannel->seqPlayer->muted && (seqChannel->muteBehavior & MUTE_BEHAVIOR_SOFTEN)) {
         channelVolume *= seqChannel->seqPlayer->muteVolumeScale;
     }
 
@@ -79,68 +79,35 @@ static void sequence_channel_process_sound(struct SequenceChannel *seqChannel) {
 
 void sequence_player_process_sound(struct SequencePlayer *seqPlayer) {
     s32 i;
-    struct SequenceChannel **channels_t;
 
-    if (seqPlayer->fadeTimer) {
+    if (seqPlayer->fadeTimer != 0) {
         seqPlayer->fadeVolume += seqPlayer->fadeVelocity;
-#ifdef VERSION_EU
-        seqPlayer->recalculateVolume = TRUE;
-#endif
-
-        if (seqPlayer->fadeVolume > US_FLOAT2(1)) {
-            seqPlayer->fadeVolume = US_FLOAT2(1);
+        if (seqPlayer->fadeVolume > 1.f) {
+            seqPlayer->fadeVolume = 1.f;
         }
         if (seqPlayer->fadeVolume < 0) {
             seqPlayer->fadeVolume = 0;
         }
 
-        if (!--seqPlayer->fadeTimer) {
-#ifdef VERSION_EU
-            if (seqPlayer->state == 2) {
-                sequence_player_disable(seqPlayer);
-                return;
-            }
-#else
+        if (--seqPlayer->fadeTimer == 0) {
             switch (seqPlayer->state) {
                 case SEQUENCE_PLAYER_STATE_FADE_OUT:
                     sequence_player_disable(seqPlayer);
                     return;
-
                 case SEQUENCE_PLAYER_STATE_2:
                 case SEQUENCE_PLAYER_STATE_3:
                     seqPlayer->state = SEQUENCE_PLAYER_STATE_0;
                     break;
-
-                case SEQUENCE_PLAYER_STATE_4:
-                    break;
             }
-#endif
         }
     }
 
-#ifdef VERSION_EU
-    if (seqPlayer->recalculateVolume) {
-        seqPlayer->appliedFadeVolume = seqPlayer->fadeVolume * seqPlayer->fadeVolumeScale;
-    }
-#endif
-
-    channels_t = seqPlayer->channels;
     // Process channels
     for (i = 0; i < CHANNELS_MAX; i++) {
-        if (IS_SEQUENCE_CHANNEL_VALID(channels_t)
-            && (*channels_t)->enabled) {
-#ifdef VERSION_EU
-            sequence_channel_process_sound(*channels_t, seqPlayer->recalculateVolume);
-#else
-            sequence_channel_process_sound(*channels_t);
-#endif
+        if (seqPlayer->channels[i] && seqPlayer->channels[i]->enabled) {
+            sequence_channel_process_sound(seqPlayer->channels[i]);
         }
-        channels_t++;
     }
-
-#ifdef VERSION_EU
-    seqPlayer->recalculateVolume = FALSE;
-#endif
 }
 
 static inline f32 get_portamento_freq_scale(struct Portamento *p) {

@@ -400,11 +400,11 @@ void aADPCMdecImpl(uint8_t flags, ADPCM_STATE state) {
     int16_t *out = rspa.buf.as_s16 + rspa.out / sizeof(int16_t);
     int nbytes = ROUND_UP_32(rspa.nbytes);
     if (flags & A_INIT) {
-        memset(out, 0, 16 * sizeof(int16_t));
+        memset(out, 0, sizeof(int16_t) << 4);
     } else if (flags & A_LOOP) {
-        memcpy(out, rspa.adpcm_loop_state, 16 * sizeof(int16_t));
+        memcpy(out, rspa.adpcm_loop_state, sizeof(int16_t) << 4);
     } else {
-        memcpy(out, state, 16 * sizeof(int16_t));
+        memcpy(out, state, sizeof(int16_t) << 4);
     }
     out += 16;
 #if HAS_SSE41
@@ -541,9 +541,9 @@ void aADPCMdecImpl(uint8_t flags, ADPCM_STATE state) {
             }
         }
 #endif
-        nbytes -= 16 * sizeof(int16_t);
+        nbytes -= sizeof(int16_t) << 4;
     }
-    memcpy(state, out - 16, 16 * sizeof(int16_t));
+    memcpy(state, out - 16, sizeof(int16_t) << 4);
 }
 
 /*@Note: Decent Slowdown */
@@ -562,10 +562,10 @@ void aResampleImpl(uint8_t flags, uint16_t pitch, RESAMPLE_STATE state) {
     if (flags & A_INIT) {
         memset(tmp, 0, 5 * sizeof(int16_t));
     } else {
-        memcpy(tmp, state, 16 * sizeof(int16_t));
+        memcpy(tmp, state, sizeof(int16_t) << 2);
     }
     if (flags & 2) {
-        memcpy(in - 8, tmp + 8, 8 * sizeof(int16_t));
+        memcpy(in - 8, tmp + 8, sizeof(int16_t) << 3);
         in -= tmp[5] / sizeof(int16_t);
     }
     in -= 4;
@@ -673,7 +673,7 @@ void aResampleImpl(uint8_t flags, uint16_t pitch, RESAMPLE_STATE state) {
 #else
     do {
         for (i = 0; i < 8; i++) {
-            tbl = resample_table[pitch_accumulator * 64 >> 16];
+            tbl = resample_table[pitch_accumulator >> 10];
             sample = ((in[0] * tbl[0] + 0x4000) >> 15) +
                      ((in[1] * tbl[1] + 0x4000) >> 15) +
                      ((in[2] * tbl[2] + 0x4000) >> 15) +
@@ -684,19 +684,19 @@ void aResampleImpl(uint8_t flags, uint16_t pitch, RESAMPLE_STATE state) {
             in += pitch_accumulator >> 16;
             pitch_accumulator %= 0x10000;
         }
-        nbytes -= 8 * sizeof(int16_t);
+        nbytes -= sizeof(int16_t) << 3;
     } while (nbytes > 0);
 #endif
 
     state[4] = (int16_t)pitch_accumulator;
-    memcpy(state, in, 4 * sizeof(int16_t));
+    memcpy(state, in,  sizeof(int16_t) << 2);
     i = (in - in_initial + 4) & 7;
     in -= i;
     if (i != 0) {
         i = -8 - i;
     }
     state[5] = i;
-    memcpy(state + 8, in, 8 * sizeof(int16_t));
+    memcpy(state + 8, in, sizeof(int16_t) << 3);
 }
 
 
@@ -793,7 +793,7 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state) {
             vols[c][1] = _mm_mul_ps(vols[c][1], rate[c]);
         }
 
-        nbytes -= 8 * sizeof(int16_t);
+        nbytes -= sizeof(int16_t) << 3;
     } while (nbytes > 0);
 
     _mm_storeu_ps((float *)state, vols[0][0]);
@@ -892,6 +892,10 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state) {
 
     int c, i;
 
+    int32_t *vols_t_0 = vols[0];
+    int32_t *vols_t_1 = vols[1];
+    int16_t *dry_0;
+
     if (flags & A_INIT) {
         target[0] = rspa.target[0];
         target[1] = rspa.target[1];
@@ -899,12 +903,14 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state) {
         rate[1] = rspa.rate[1];
         vol_dry = rspa.vol_dry;
         vol_wet = rspa.vol_wet;
-        step_diff[0] = rspa.vol[0] * (rate[0] - 0x10000) / 8;
-        step_diff[1] = rspa.vol[0] * (rate[1] - 0x10000) / 8;
+        step_diff[0] = rspa.vol[0] * (rate[0] - 0x10000) >> 3;
+        step_diff[1] = rspa.vol[1] * (rate[1] - 0x10000) >> 3;
 
         for (i = 0; i < 8; i++) {
-            vols[0][i] = clamp32((int64_t)(rspa.vol[0] << 16) + step_diff[0] * (i + 1));
-            vols[1][i] = clamp32((int64_t)(rspa.vol[1] << 16) + step_diff[1] * (i + 1));
+            *vols_t_0 = clamp32((int64_t)(rspa.vol[0] << 16) + step_diff[0] * (i + 1));
+            *vols_t_1 = clamp32((int64_t)(rspa.vol[1] << 16) + step_diff[1] * (i + 1));
+            vols_t_0++;
+            vols_t_1++;
         }
     } else {
         memcpy(vols[0], state, 32);
@@ -916,32 +922,39 @@ void aEnvMixerImpl(uint8_t flags, ENVMIX_STATE state) {
         vol_dry = state[38];
         vol_wet = state[39];
     }
-
+    char rate_0;
     do {
+        vols_t_0 = vols[0];
         for (c = 0; c < 2; c++) {
+            dry_0 = dry[c];
+            rate_0 = (rate[c] >> 16) > 0;
             for (i = 0; i < 8; i++) {
-                if ((rate[c] >> 16) > 0) {
+                if (rate_0) {
                     // Increasing volume
-                    if ((vols[c][i] >> 16) > target[c]) {
-                        vols[c][i] = target[c] << 16;
+                    if ((*vols_t_0 >> 16) > target[c]) {
+                        *vols_t_0 = target[c] << 16;
                     }
                 } else {
                     // Decreasing volume
-                    if ((vols[c][i] >> 16) < target[c]) {
-                        vols[c][i] = target[c] << 16;
+                    if ((*vols_t_0 >> 16) < target[c]) {
+                        *vols_t_0 = target[c] << 16;
                     }
                 }
-                dry[c][i] = clamp16((dry[c][i] * 0x7fff + in[i] * (((vols[c][i] >> 16) * vol_dry + 0x4000) >> 15) + 0x4000) >> 15);
+                *dry_0 = clamp16((*dry_0 * 0x7fff + *in * (((*vols_t_0 >> 16) * vol_dry + 0x4000) >> 15) + 0x4000) >> 15);
                 if (flags & A_AUX) {
-                    wet[c][i] = clamp16((wet[c][i] * 0x7fff + in[i] * (((vols[c][i] >> 16) * vol_wet + 0x4000) >> 15) + 0x4000) >> 15);
+                    wet[c][i] = clamp16((wet[c][i] * 0x7fff + *in * (((*vols_t_0 >> 16) * vol_wet + 0x4000) >> 15) + 0x4000) >> 15);
                 }
-                vols[c][i] = clamp32((int64_t)vols[c][i] * rate[c] >> 16);
+                *vols_t_0 = clamp32((int64_t)*vols_t_0 * rate[c] >> 16);
+                vols_t_0++;
+                dry_0++;
+                in++;
             }
 
             dry[c] += 8;
             if (flags & A_AUX) {
                 wet[c] += 8;
             }
+            in -= 8;
         }
 
         nbytes -= 16;

@@ -833,12 +833,36 @@ void get_pos_from_transform_mtx(Vec3f dest, Mat4 objMtx, Mat4 camMtx) {
  * Basically it converts the direction to spherical coordinates.
  */
 void vec3f_get_dist_and_angle(Vec3f from, Vec3f to, f32 *dist, s16 *pitch, s16 *yaw) {
-    register f32 x = to[0] - from[0];
-    register f32 y = to[1] - from[1];
-    register f32 z = to[2] - from[2];
+    f32 x = to[0] - from[0];
+    f32 y = to[1] - from[1];
+    f32 z = to[2] - from[2];
 
-    *dist = sqrtf(x * x + y * y + z * z);
-    *pitch = atan2s(sqrtf(x * x + z * z), y);
+    f32 xz_sq = x * x + z * z;
+    f32 xz_len;
+    f32 dist_val;
+
+    // VFPU sqrt for xz_len
+    __asm__ volatile (
+        "mtv    %1, S000\n"
+        "vsqrt.s S000, S000\n"
+        "mfv    %0, S000\n"
+        : "=r"(xz_len)
+        : "r"(xz_sq)
+    );
+
+    // VFPU sqrt for full distance
+    f32 dist_sq = xz_sq + y * y;
+
+    __asm__ volatile (
+        "mtv    %1, S000\n"
+        "vsqrt.s S000, S000\n"
+        "mfv    %0, S000\n"
+        : "=r"(dist_val)
+        : "r"(dist_sq)
+    );
+
+    *dist = dist_val;
+    *pitch = atan2s(xz_len, y);
     *yaw = atan2s(z, x);
 }
 

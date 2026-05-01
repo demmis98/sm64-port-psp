@@ -131,49 +131,95 @@ void *find_vector_perpendicular_to_plane(Vec3f dest, Vec3f a, Vec3f b, Vec3f c) 
 }
 
 /// Make vector 'dest' the cross product of vectors a and b.
-void *vec3f_cross(Vec3f dest, Vec3f a, Vec3f b) {
-    dest[0] = a[1] * b[2] - b[1] * a[2];
-    dest[1] = a[2] * b[0] - b[2] * a[0];
-    dest[2] = a[0] * b[1] - b[0] * a[1];
-    return &dest; //! warning: function returns address of local variable
+void vec3f_cross(Vec3f dest, Vec3f a, Vec3f b) {
+    __asm__ volatile (
+            // load a
+        "lv.s S000, 0(%1)\n"
+        "lv.s S001, 4(%1)\n"
+        "lv.s S002, 8(%1)\n"
+            // load b
+        "lv.s S010, 0(%2)\n"
+        "lv.s S011, 4(%2)\n"
+        "lv.s S012, 8(%2)\n"
+
+        "vcrsp.t C020, C000, C010\n" // cross product
+
+            // store result
+        "sv.s S020, 0(%0)\n"
+        "sv.s S021, 4(%0)\n"
+        "sv.s S022, 8(%0)\n"
+        :
+        : "r"(dest), "r"(a), "r"(b)
+        : "memory"
+    );
 }
 
 /// Scale vector 'dest' so it has length 1
-void *vec3f_normalize(Vec3f dest) {
-    //! Possible division by zero
-    f32 invsqrt = 1.0f / sqrtf(dest[0] * dest[0] + dest[1] * dest[1] + dest[2] * dest[2]);
+void vec3f_normalize(Vec3f dest) {
+    __asm__ volatile (
+        // load vector (x,y,z,?)
+        "lv.s S000, 0(%0)\n"
+        "lv.s S001, 4(%0)\n"
+        "lv.s S002, 8(%0)\n"
 
-    dest[0] *= invsqrt;
-    dest[1] *= invsqrt;
-    dest[2] *= invsqrt;
-    return &dest; //! warning: function returns address of local variable
+
+        // dot product: S010 = x*x + y*y + z*z
+        "vdot.t  S010, C000, C000\n"
+
+        // rsqrt (fast!)
+        "vrsq.s  S010, S010\n"
+
+        // scale vector
+        "vscl.t  C000, C000, S010\n"
+
+        // store back
+        "sv.s S000, 0(%0)\n"
+        "sv.s S001, 4(%0)\n"
+        "sv.s S002, 8(%0)\n"
+        :
+        : "r"(dest)
+        : "memory"
+    );
 }
 
 #pragma GCC diagnostic pop
 
 /// Copy matrix 'src' to 'dest'
 void mtxf_copy(Mat4 dest, Mat4 src) {
-    register s32 i;
-    register u32 *d = (u32 *) dest;
-    register u32 *s = (u32 *) src;
+    __asm__ volatile(
+        "lv.q   C000, 0(%1)\n"
+        "lv.q   C010, 16(%1)\n"
+        "lv.q   C020, 32(%1)\n"
+        "lv.q   C030, 48(%1)\n"
 
-    for (i = 0; i < 16; i++) {
-        *d++ = *s++;
-    }
+        "sv.q   C000, 0(%0)\n"
+        "sv.q   C010, 16(%0)\n"
+        "sv.q   C020, 32(%0)\n"
+        "sv.q   C030, 48(%0)\n"
+        :
+        : "r"(dest), "r"(src)
+        : "memory"
+    );
 }
 
 /**
  * Set mtx to the identity matrix
  */
 void mtxf_identity(Mat4 mtx) {
-    register s32 i;
-    register f32 *dest;
-    // Note: These loops need to be on one line to match on PAL
-    // initialize everything except the first and last cells to 0
-    for (dest = (f32 *) mtx + 1, i = 0; i < 14; dest++, i++) *dest = 0;
-
-    // initialize the diagonal cells to 1
-    for (dest = (f32 *) mtx, i = 0; i < 4; dest += 5, i++) *dest = 1;
+    __asm__ volatile(
+        "vidt.q R100\n" //load identity matrix
+        "vidt.q R101\n"
+        "vidt.q R102\n"
+        "vidt.q R103\n"
+            
+        "sv.q   R100, 0(%0)\n"    // row 0
+        "sv.q   R101, 16(%0)\n"    // row 1
+        "sv.q   R102, 32(%0)\n"    // row 2
+        "sv.q   R103, 48(%0)\n"    // row 3
+        :
+        : "r"(mtx)
+        : "memory"
+    );
 }
 
 /**
@@ -351,10 +397,13 @@ void mtxf_billboard(Mat4 dest, Mat4 mtx, Vec3f position, s16 angle) {
     dest[1][2] = 0;
     dest[1][3] = 0;
 
-    dest[2][0] = 0;
-    dest[2][1] = 0;
-    dest[2][2] = 1;
-    dest[2][3] = 0;
+    __asm__ volatile(
+        "vidt.q C000\n"
+        "sv.q   C000, 32(%0)"
+        :
+        : "r"(dest)
+        : "memory"
+    );
 
     dest[3][0] =
         mtx[0][0] * position[0] + mtx[1][0] * position[1] + mtx[2][0] * position[2] + mtx[3][0];
@@ -490,6 +539,39 @@ void mtxf_align_terrain_triangle(Mat4 mtx, Vec3f pos, s16 yaw, f32 radius) {
  * then a.
  */
 void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {
+    /*
+    __asm__ volatile(
+        "lv.q   C100, 0(%2)\n"
+        "lv.q   C110, 16(%2)\n"
+        "lv.q   C120, 32(%2)\n"
+        //"lv.q   C130, 48(%2)\n"
+        "vzero.q C130\n"
+
+        "lv.q   C030, 0(%1)\n"
+
+        "vone.q C000\n"
+        "vone.q C010\n"
+        "vone.q C020\n"
+
+        "vscl.t C000, C000, S030\n"
+        "vscl.t C010, C010, S031\n"
+        "vscl.t C020, C020, S032\n"
+
+        "vidt.q C030\n"
+
+        "vmmul.q M200, M100, M000\n"
+
+        "vidt.q R203\n"
+
+        "sv.q   C200, 0(%0)\n"
+        "sv.q   C210, 16(%0)\n"
+        "sv.q   C220, 32(%0)\n"
+        "sv.q   C230, 48(%0)\n"
+        :
+        : "r"(dest), "r"(a), "r"(b)
+        : "memory"
+    );
+    */
     Mat4 temp;
     register f32 entry0;
     register f32 entry1;
@@ -537,15 +619,30 @@ void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {
  * Set matrix 'dest' to 'mtx' scaled by vector s
  */
 void mtxf_scale_vec3f(Mat4 dest, Mat4 mtx, Vec3f s) {
-    register s32 i;
+    __asm__ volatile(
+        "lv.q   C000, 0(%1)\n"
+        "lv.q   C010, 16(%1)\n"
+        "lv.q   C020, 32(%1)\n"
+        "lv.q   C030, 48(%1)\n"
 
-    for (i = 0; i < 4; i++) {
-        dest[0][i] = mtx[0][i] * s[0];
-        dest[1][i] = mtx[1][i] * s[1];
-        dest[2][i] = mtx[2][i] * s[2];
-        dest[3][i] = mtx[3][i];
-    }
+        "lv.s   S100, 0(%2)\n"
+        "lv.s   S101, 4(%2)\n"
+        "lv.s   S102, 8(%2)\n"
+
+        "vscl.q C000, C000, S100\n"
+        "vscl.q C010, C010, S101\n"
+        "vscl.q C020, C020, S102\n"
+
+        "sv.q   C000, 0(%0)\n"
+        "sv.q   C010, 16(%0)\n"
+        "sv.q   C020, 32(%0)\n"
+        "sv.q   C030, 48(%0)\n"
+        :
+        : "r"(dest), "r"(mtx), "r"(s)
+        : "memory"
+    );
 }
+
 
 /**
  * Multiply a vector with a transformation matrix, which applies the transformation
@@ -553,13 +650,29 @@ void mtxf_scale_vec3f(Mat4 dest, Mat4 mtx, Vec3f s) {
  * true for transformation matrices if the translation has a w component of 1.
  */
 void mtxf_mul_vec3s(Mat4 mtx, Vec3s b) {
-    register f32 x = b[0];
-    register f32 y = b[1];
-    register f32 z = b[2];
+    __asm__ volatile (
+            // load b
+        "lv.s S000, 0(%1)\n"
+        "lv.s S001, 4(%1)\n"
+        "lv.s S002, 8(%1)\n"
 
-    b[0] = x * mtx[0][0] + y * mtx[1][0] + z * mtx[2][0] + mtx[3][0];
-    b[1] = x * mtx[0][1] + y * mtx[1][1] + z * mtx[2][1] + mtx[3][1];
-    b[2] = x * mtx[0][2] + y * mtx[1][2] + z * mtx[2][2] + mtx[3][2];
+        "lv.q C100, 0(%0)\n"
+        "lv.q C110, 16(%0)\n"
+        "lv.q C120, 32(%0)\n"
+        "lv.q C130, 48(%0)\n"
+
+        "vhdp.q S010, R100, R000\n" // cross product
+        "vhdp.q S011, R101, R000\n" // cross product
+        "vhdp.q S012, R102, R000\n" // cross product
+
+            // store result
+        "sv.s S010, 0(%0)\n"
+        "sv.s S011, 4(%0)\n"
+        "sv.s S012, 8(%0)\n"
+        :
+        : "r"(mtx), "r"(b)
+        : "memory"
+    );
 }
 
 /**

@@ -244,7 +244,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     dx = to[0] - from[0];
     dz = to[2] - from[2];
 
-    invLength = -1.0 / sqrtf(dx * dx + dz * dz);
+    invLength = -rsqrtf(dx * dx + dz * dz);
     dx *= invLength;
     dz *= invLength;
 
@@ -256,7 +256,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     yColZ = to[1] - from[1];
     zColZ = to[2] - from[2];
 
-    invLength = -1.0 / sqrtf(xColZ * xColZ + yColZ * yColZ + zColZ * zColZ);
+    invLength = -rsqrtf(xColZ * xColZ + yColZ * yColZ + zColZ * zColZ);
     xColZ *= invLength;
     yColZ *= invLength;
     zColZ *= invLength;
@@ -265,7 +265,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     yColX = zColY * xColZ - xColY * zColZ;
     zColX = xColY * yColZ - yColY * xColZ;
 
-    invLength = 1.0 / sqrtf(xColX * xColX + yColX * yColX + zColX * zColX);
+    invLength = rsqrtf(xColX * xColX + yColX * yColX + zColX * zColX);
 
     xColX *= invLength;
     yColX *= invLength;
@@ -275,7 +275,7 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
     yColY = zColZ * xColX - xColZ * zColX;
     zColY = xColZ * yColX - yColZ * xColX;
 
-    invLength = 1.0 / sqrtf(xColY * xColY + yColY * yColY + zColY * zColY);
+    invLength = rsqrtf(xColY * xColY + yColY * yColY + zColY * zColY);
     xColY *= invLength;
     yColY *= invLength;
     zColY *= invLength;
@@ -306,17 +306,20 @@ void mtxf_lookat(Mat4 mtx, Vec3f from, Vec3f to, s16 roll) {
  * axis, and then translates.
  */
 void mtxf_rotate_zxy_and_translate(Mat4 dest, Vec3f translate, Vec3s rotate) {
-    register f32 sx = sins(rotate[0]);
-    register f32 cx = coss(rotate[0]);
+    f32 sx = sins(rotate[0]);
+    f32 cx = coss(rotate[0]);
 
-    register f32 sy = sins(rotate[1]);
-    register f32 cy = coss(rotate[1]);
+    f32 sy = sins(rotate[1]);
+    f32 cy = coss(rotate[1]);
 
-    register f32 sz = sins(rotate[2]);
-    register f32 cz = coss(rotate[2]);
+    f32 sz = sins(rotate[2]);
+    f32 cz = coss(rotate[2]);
 
-    dest[0][0] = cy * cz + sx * sy * sz;
-    dest[1][0] = -cy * sz + sx * sy * cz;
+    register f32 sxsy = sx * sy;
+    register f32 sxcy = sx * cy;
+
+    dest[0][0] = cy * cz + sxsy * sz;
+    dest[1][0] = -cy * sz + sxsy * cz;
     dest[2][0] = cx * sy;
     dest[3][0] = translate[0];
 
@@ -325,8 +328,8 @@ void mtxf_rotate_zxy_and_translate(Mat4 dest, Vec3f translate, Vec3s rotate) {
     dest[2][1] = -sx;
     dest[3][1] = translate[1];
 
-    dest[0][2] = -sy * cz + sx * cy * sz;
-    dest[1][2] = sy * sz + sx * cy * cz;
+    dest[0][2] = -sy * cz + sxcy * sz;
+    dest[1][2] = sy * sz + sxcy * cz;
     dest[2][2] = cx * cy;
     dest[3][2] = translate[2];
 
@@ -691,19 +694,6 @@ void get_pos_from_transform_mtx(Vec3f dest, Mat4 objMtx, Mat4 camMtx) {
         : "r"(camMtx), "r"(objMtx), "r"(dest)
         : "memory"
     );
-
-    /*
-    f32 camX = camMtx[3][0] * camMtx[0][0] + camMtx[3][1] * camMtx[0][1] + camMtx[3][2] * camMtx[0][2];
-    f32 camY = camMtx[3][0] * camMtx[1][0] + camMtx[3][1] * camMtx[1][1] + camMtx[3][2] * camMtx[1][2];
-    f32 camZ = camMtx[3][0] * camMtx[2][0] + camMtx[3][1] * camMtx[2][1] + camMtx[3][2] * camMtx[2][2];
-
-    dest[0] =
-        objMtx[3][0] * camMtx[0][0] + objMtx[3][1] * camMtx[0][1] + objMtx[3][2] * camMtx[0][2] - camX;
-    dest[1] =
-        objMtx[3][0] * camMtx[1][0] + objMtx[3][1] * camMtx[1][1] + objMtx[3][2] * camMtx[1][2] - camY;
-    dest[2] =
-        objMtx[3][0] * camMtx[2][0] + objMtx[3][1] * camMtx[2][1] + objMtx[3][2] * camMtx[2][2] - camZ;
-    */
 }
 
 /**
@@ -866,6 +856,7 @@ f32 atan2f(f32 y, f32 x) {
  * [0, 0, 0, 0, 1, 2, ... n-1, n, n, n, n]
  * TODO: verify the classification of the spline / figure out how polynomials were computed
  */
+
  typedef struct {
     float A[4];
     float B[4];

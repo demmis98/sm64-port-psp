@@ -106,8 +106,7 @@ static inline int32_t clamp32(int64_t v) {
 }
 
 void memcpy4(void *dest, const void *src, size_t count);
-//#if defined(TARGET_PSP)
-#if 0
+#if defined(TARGET_PSP)
 void memcpy_vfpu( void* dst, const void* src, size_t size )
 {
     //less than 16bytes or there is no 32bit alignment -> not worth optimizing

@@ -157,22 +157,14 @@ void vec3f_cross(Vec3f dest, Vec3f a, Vec3f b) {
 /// Scale vector 'dest' so it has length 1
 void vec3f_normalize(Vec3f dest) {
     __asm__ volatile (
-        // load vector (x,y,z,?)
         "lv.s S000, 0(%0)\n"
         "lv.s S001, 4(%0)\n"
         "lv.s S002, 8(%0)\n"
 
-
-        // dot product: S010 = x*x + y*y + z*z
         "vdot.t  S010, C000, C000\n"
-
-        // rsqrt (fast!)
         "vrsq.s  S010, S010\n"
-
-        // scale vector
         "vscl.t  C000, C000, S010\n"
 
-        // store back
         "sv.s S000, 0(%0)\n"
         "sv.s S001, 4(%0)\n"
         "sv.s S002, 8(%0)\n"
@@ -207,10 +199,7 @@ void mtxf_copy(Mat4 dest, Mat4 src) {
  */
 void mtxf_identity(Mat4 mtx) {
     __asm__ volatile(
-        "vidt.q R100\n" //load identity matrix
-        "vidt.q R101\n"
-        "vidt.q R102\n"
-        "vidt.q R103\n"
+        "vmidt.q M100\n" //load identity matrix
             
         "sv.q   R100, 0(%0)\n"    // row 0
         "sv.q   R101, 16(%0)\n"    // row 1
@@ -397,13 +386,10 @@ void mtxf_billboard(Mat4 dest, Mat4 mtx, Vec3f position, s16 angle) {
     dest[1][2] = 0;
     dest[1][3] = 0;
 
-    __asm__ volatile(
-        "vidt.q C000\n"
-        "sv.q   C000, 32(%0)"
-        :
-        : "r"(dest)
-        : "memory"
-    );
+    dest[2][0] = 0;
+    dest[2][1] = 0;
+    dest[2][2] = 1;
+    dest[2][3] = 0;
 
     dest[3][0] =
         mtx[0][0] * position[0] + mtx[1][0] * position[1] + mtx[2][0] * position[2] + mtx[3][0];
@@ -538,26 +524,19 @@ void mtxf_align_terrain_triangle(Mat4 mtx, Vec3f pos, s16 yaw, f32 radius) {
  * The resulting matrix represents first applying transformation b and
  * then a.
  */
+ 
 void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {
-    /*
     __asm__ volatile(
         "lv.q   C100, 0(%2)\n"
         "lv.q   C110, 16(%2)\n"
         "lv.q   C120, 32(%2)\n"
-        //"lv.q   C130, 48(%2)\n"
-        "vzero.q C130\n"
+        "lv.q   C130, 48(%2)\n"
 
-        "lv.q   C030, 0(%1)\n"
-
-        "vone.q C000\n"
-        "vone.q C010\n"
-        "vone.q C020\n"
-
-        "vscl.t C000, C000, S030\n"
-        "vscl.t C010, C010, S031\n"
-        "vscl.t C020, C020, S032\n"
-
-        "vidt.q C030\n"
+        "lv.q   C000, 0(%1)\n"
+        "lv.q   C010, 16(%1)\n"
+        "lv.q   C020, 32(%1)\n"
+        "lv.q   C030, 48(%1)\n"
+        "vidt.q R003\n"
 
         "vmmul.q M200, M100, M000\n"
 
@@ -571,48 +550,6 @@ void mtxf_mul(Mat4 dest, Mat4 a, Mat4 b) {
         : "r"(dest), "r"(a), "r"(b)
         : "memory"
     );
-    */
-    Mat4 temp;
-    register f32 entry0;
-    register f32 entry1;
-    register f32 entry2;
-
-    // column 0
-    entry0 = a[0][0];
-    entry1 = a[0][1];
-    entry2 = a[0][2];
-    temp[0][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0];
-    temp[0][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1];
-    temp[0][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2];
-
-    // column 1
-    entry0 = a[1][0];
-    entry1 = a[1][1];
-    entry2 = a[1][2];
-    temp[1][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0];
-    temp[1][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1];
-    temp[1][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2];
-
-    // column 2
-    entry0 = a[2][0];
-    entry1 = a[2][1];
-    entry2 = a[2][2];
-    temp[2][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0];
-    temp[2][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1];
-    temp[2][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2];
-
-    // column 3
-    entry0 = a[3][0];
-    entry1 = a[3][1];
-    entry2 = a[3][2];
-    temp[3][0] = entry0 * b[0][0] + entry1 * b[1][0] + entry2 * b[2][0] + b[3][0];
-    temp[3][1] = entry0 * b[0][1] + entry1 * b[1][1] + entry2 * b[2][1] + b[3][1];
-    temp[3][2] = entry0 * b[0][2] + entry1 * b[1][2] + entry2 * b[2][2] + b[3][2];
-
-    temp[0][3] = temp[1][3] = temp[2][3] = 0;
-    temp[3][3] = 1;
-
-    mtxf_copy(dest, temp);
 }
 
 /**
@@ -727,6 +664,35 @@ void mtxf_rotate_xy(Mtx *mtx, s16 angle) {
  * the camera position.
  */
 void get_pos_from_transform_mtx(Vec3f dest, Mat4 objMtx, Mat4 camMtx) {
+    __asm__ volatile(
+        "lv.q   C000, 0(%0)\n"      // cam row 0
+        "lv.q   C010, 16(%0)\n"     // cam row 1
+        "lv.q   C020, 32(%0)\n"     // cam row 2
+        "lv.q   C030, 48(%0)\n"     // cam translation
+
+        "lv.q   C100, 48(%1)\n"
+
+        "vdot.t S100, C030, C000\n"
+        "vdot.t S110, C100, C000\n"
+        "vdot.t S101, C030, C010\n"
+        "vdot.t S111, C100, C010\n"
+        "vdot.t S102, C030, C020\n"
+        "vdot.t S112, C100, C020\n"
+
+        "vsub.s S110, S110, S100\n"
+        "vsub.s S111, S111, S101\n"
+        "vsub.s S112, S112, S102\n"
+
+        "sv.s   S110, 0(%2)\n"
+        "sv.s   S111, 4(%2)\n"
+        "sv.s   S112, 8(%2)\n"
+
+        :
+        : "r"(camMtx), "r"(objMtx), "r"(dest)
+        : "memory"
+    );
+
+    /*
     f32 camX = camMtx[3][0] * camMtx[0][0] + camMtx[3][1] * camMtx[0][1] + camMtx[3][2] * camMtx[0][2];
     f32 camY = camMtx[3][0] * camMtx[1][0] + camMtx[3][1] * camMtx[1][1] + camMtx[3][2] * camMtx[1][2];
     f32 camZ = camMtx[3][0] * camMtx[2][0] + camMtx[3][1] * camMtx[2][1] + camMtx[3][2] * camMtx[2][2];
@@ -737,6 +703,7 @@ void get_pos_from_transform_mtx(Vec3f dest, Mat4 objMtx, Mat4 camMtx) {
         objMtx[3][0] * camMtx[1][0] + objMtx[3][1] * camMtx[1][1] + objMtx[3][2] * camMtx[1][2] - camY;
     dest[2] =
         objMtx[3][0] * camMtx[2][0] + objMtx[3][1] * camMtx[2][1] + objMtx[3][2] * camMtx[2][2] - camZ;
+    */
 }
 
 /**
@@ -899,45 +866,87 @@ f32 atan2f(f32 y, f32 x) {
  * [0, 0, 0, 0, 1, 2, ... n-1, n, n, n, n]
  * TODO: verify the classification of the spline / figure out how polynomials were computed
  */
-void spline_get_weights(Vec4f result, f32 t, UNUSED s32 c) {
-    f32 tinv = 1 - t;
-    f32 tinv2 = tinv * tinv;
-    f32 tinv3 = tinv2 * tinv;
-    f32 t2 = t * t;
-    f32 t3 = t2 * t;
+ typedef struct {
+    float A[4];
+    float B[4];
+    float C[4];
+    float D[4];
+} SplineCoeffs;
 
-    switch (gSplineState) {
-        case CURVE_BEGIN_1:
-            result[0] = tinv3;
-            result[1] = t3 * 1.75f - t2 * 4.5f + t * 3.0f;
-            result[2] = -t3 * (11 / 12.0f) + t2 * 1.5f;
-            result[3] = t3 * (1 / 6.0f);
-            break;
-        case CURVE_BEGIN_2:
-            result[0] = tinv3 * 0.25f;
-            result[1] = t3 * (7 / 12.0f) - t2 * 1.25f + t * 0.25f + (7 / 12.0f);
-            result[2] = -t3 * 0.5f + t2 * 0.5f + t * 0.5f + (1 / 6.0f);
-            result[3] = t3 * (1 / 6.0f);
-            break;
-        case CURVE_MIDDLE:
-            result[0] = tinv3 * (1 / 6.0f);
-            result[1] = t3 * 0.5f - t2 + (4 / 6.0f);
-            result[2] = -t3 * 0.5f + t2 * 0.5f + t * 0.5f + (1 / 6.0f);
-            result[3] = t3 * (1 / 6.0f);
-            break;
-        case CURVE_END_1:
-            result[0] = tinv3 * (1 / 6.0f);
-            result[1] = -tinv3 * 0.5f + tinv2 * 0.5f + tinv * 0.5f + (1 / 6.0f);
-            result[2] = tinv3 * (7 / 12.0f) - tinv2 * 1.25f + tinv * 0.25f + (7 / 12.0f);
-            result[3] = t3 * 0.25f;
-            break;
-        case CURVE_END_2:
-            result[0] = tinv3 * (1 / 6.0f);
-            result[1] = -tinv3 * (11 / 12.0f) + tinv2 * 1.5f;
-            result[2] = tinv3 * 1.75f - tinv2 * 4.5f + tinv * 3.0f;
-            result[3] = t3;
-            break;
+static const SplineCoeffs gSplineCoeff[5] = {
+    // CURVE_BEGIN_1
+    {
+        { -1.0f,  1.75f, -0.91666667f, 0.16666667f },
+        {  3.0f, -4.5f,   1.5f,        0.0f        },
+        { -3.0f,  3.0f,   0.0f,        0.0f        },
+        {  1.0f,  0.0f,   0.0f,        0.0f        }
+    },
+
+    // CURVE_BEGIN_2
+    {
+        { -0.25f, 0.58333333f, -0.5f, 0.16666667f },
+        {  0.75f,-1.25f,       0.5f,  0.0f        },
+        { -0.75f, 0.25f,       0.5f,  0.0f        },
+        {  0.25f, 0.58333333f, 0.16666667f, 0.0f  }
+    },
+
+    // CURVE_MIDDLE
+    {
+        { -0.16666667f, 0.5f, -0.5f, 0.16666667f },
+        {  0.5f,       -1.0f, 0.5f,  0.0f        },
+        { -0.5f,        0.0f, 0.5f,  0.0f        },
+        {  0.16666667f, 0.66666667f, 0.16666667f, 0.0f }
+    },
+
+    // CURVE_END_1
+    {
+        { -0.16666667f, 0.5f, -0.75f, 0.25f },
+        {  0.5f,       -1.0f, 1.25f,  0.0f },
+        { -0.5f,        0.5f, -0.25f, 0.0f },
+        {  0.16666667f, 0.16666667f, 0.58333333f, 0.0f }
+    },
+
+    // CURVE_END_2
+    {
+        { -0.16666667f, 0.91666667f, -1.75f, 1.0f },
+        {  0.5f,       -1.5f,        4.5f,   0.0f },
+        { -0.5f,        0.0f,       -3.0f,   0.0f },
+        {  0.16666667f, 0.0f,        0.0f,   0.0f }
     }
+};
+
+void spline_get_weights(Vec4f result, f32 t, UNUSED s32 c) {
+    const SplineCoeffs* sc = &gSplineCoeff[gSplineState];
+
+    __asm__ volatile (
+        // broadcast t
+        "mtv        %1, S010\n"
+        "vone.q C000\n"
+        "vscl.q C000, C000, S010\n"
+
+        // load coeffs
+        "lv.q       C200,  0(%2)\n"   // A
+        "lv.q       C210, 16(%2)\n"   // B
+        "lv.q       C220, 32(%2)\n"   // C
+        "lv.q       C230, 48(%2)\n"   // D
+
+        // Horner evaluation
+        "vmul.q     C100, C200, C000\n"
+        "vadd.q     C100, C100, C210\n"
+
+        "vmul.q     C100, C100, C000\n"
+        "vadd.q     C100, C100, C220\n"
+
+        "vmul.q     C100, C100, C000\n"
+        "vadd.q     C100, C100, C230\n"
+
+        // store
+        "sv.q       C100, 0(%0)\n"
+
+        :
+        : "r"(result), "r"(t), "r"(sc)
+        : "memory"
+    );
 }
 
 /**
@@ -961,16 +970,14 @@ void anim_spline_init(Vec4s *keyFrames) {
  */
 s32 anim_spline_poll(Vec3f result) {
     Vec4f weights;
-    s32 i;
     s32 hasEnded = FALSE;
 
     vec3f_copy(result, gVec3fZero);
     spline_get_weights(weights, gSplineKeyframeFraction, gSplineState);
-    for (i = 0; i < 4; i++) {
-        result[0] += weights[i] * gSplineKeyframe[i][1];
-        result[1] += weights[i] * gSplineKeyframe[i][2];
-        result[2] += weights[i] * gSplineKeyframe[i][3];
-    }
+
+    result[0] += weights[0] * gSplineKeyframe[0][1] + weights[1] * gSplineKeyframe[1][1] + weights[2] * gSplineKeyframe[2][1] + weights[3] * gSplineKeyframe[3][1];
+    result[1] += weights[0] * gSplineKeyframe[0][2] + weights[1] * gSplineKeyframe[1][2] + weights[2] * gSplineKeyframe[2][2] + weights[3] * gSplineKeyframe[3][2];
+    result[2] += weights[0] * gSplineKeyframe[0][3] + weights[1] * gSplineKeyframe[1][3] + weights[2] * gSplineKeyframe[2][3] + weights[3] * gSplineKeyframe[3][3];
 
     if ((gSplineKeyframeFraction += gSplineKeyframe[0][0] / 1000.0f) >= 1) {
         gSplineKeyframe++;
